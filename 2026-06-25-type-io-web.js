@@ -57,6 +57,7 @@ let previousRankMap = new Map();
 let tickerMessages = [];
 let tickerIndex = 0;
 let tickerSignature = "";
+let lastTickerUpdateAt = 0;
 let lastLeaderName = "";
 let announcedRanks = new Set();
 let eliminatedPlayers = new Set();
@@ -148,6 +149,8 @@ const totalCharsLabel = document.getElementById("totalCharsLabel");
 const typedCharsLabel = document.getElementById("typedCharsLabel");
 const runnerBoy = document.getElementById("runnerBoy");
 const leaderRunner = document.getElementById("leaderRunner");
+const secondRunner = document.getElementById("secondRunner");
+const thirdRunner = document.getElementById("thirdRunner");
 const koOverlay = document.getElementById("koOverlay");
 const resultTitle = document.getElementById("resultTitle");
 const resultSummary = document.getElementById("resultSummary");
@@ -166,7 +169,7 @@ function showScreen(screen) {
     node.classList.toggle("is-visible", node === screen);
   });
   if (screen !== teacherScreen) clearInterval(teacherPollId);
-  if (screen === battleScreen) typingInput.focus();
+  if (screen === battleScreen && !isTeacherBattle) setTimeout(() => typingInput.focus(), 80);
 }
 
 function saveSession(role, data = {}) {
@@ -855,8 +858,11 @@ function updateStats() {
   speedText.textContent = `${speed}타`;
   progressFill.style.width = `${progress}%`;
   if (runnerBoy) runnerBoy.style.left = `${Math.min(96, Math.max(0, progress))}%`;
-  const leaderProgress = Math.max(progress, ...uniqueActivePlayers(remotePlayers).map((student) => Number(student.progress || 0)));
+  const rankedProgress = sortPlayers(remotePlayers).slice(0, 3).map((student) => Number(student.progress || 0));
+  const leaderProgress = Math.max(progress, rankedProgress[0] || 0);
   if (leaderRunner) leaderRunner.style.left = `${Math.min(96, Math.max(0, leaderProgress))}%`;
+  if (secondRunner) secondRunner.style.left = `${Math.min(96, Math.max(0, rankedProgress[1] || 0))}%`;
+  if (thirdRunner) thirdRunner.style.left = `${Math.min(96, Math.max(0, rankedProgress[2] || 0))}%`;
   accuracyText.textContent = `${accuracy}%`;
   typedCharsLabel.textContent = `${typed.length} 자`;
 
@@ -896,6 +902,9 @@ function setTickerMessages(messages) {
   const baseMessages = messages.filter(Boolean);
   const nextSignature = baseMessages.join("||");
   if (nextSignature === tickerSignature && tickerMessages.length) return;
+  const forceUpdate = /시작|멈췄|탈락|회복|재도전|새 경기|기다리는 중/.test(nextSignature);
+  if (!forceUpdate && Date.now() - lastTickerUpdateAt < 8500 && tickerMessages.length) return;
+  lastTickerUpdateAt = Date.now();
   tickerSignature = nextSignature;
   tickerMessages = withCheerArts(baseMessages);
   if (!tickerMessages.length) return;
@@ -922,6 +931,14 @@ function applyTickerMessage(message) {
   const isArt = typeof message === "object";
   tickerText.textContent = isArt ? message.text : message;
   tickerText.classList.toggle("is-dot-art", isArt);
+  requestAnimationFrame(() => {
+    const windowWidth = tickerWindow?.clientWidth || 0;
+    const textWidth = Math.max(tickerText.scrollWidth, tickerText.offsetWidth, windowWidth);
+    const duration = Math.max(12, Math.min(32, (windowWidth + textWidth) / 86));
+    tickerText.style.setProperty("--ticker-start", `${windowWidth + 24}px`);
+    tickerText.style.setProperty("--ticker-end", `-${textWidth + 24}px`);
+    tickerText.style.setProperty("--ticker-duration", `${duration}s`);
+  });
 }
 
 function restartTickerAnimation() {
@@ -996,7 +1013,7 @@ function runCountdownThenStart() {
       startTensionMusic();
       prepareBattle();
       if (isTeacherBattle) setRoomStatus("playing");
-      if (!isTeacherBattle) typingInput.focus();
+      if (!isTeacherBattle) setTimeout(() => typingInput.focus(), 80);
       setTickerMessages(["배틀이 시작되었습니다. 정확하고 빠르게 입력하세요.", "첫 완주자가 나오는 순간 최종 경쟁이 시작됩니다."]);
     }, 850);
   };
@@ -1047,7 +1064,7 @@ function renderScores(player = { progress: 0, accuracy: 100, speed: 0, doneChars
   const myIndex = ranked.findIndex((student) => student.isMe);
   const leader = ranked[0];
   const me = myIndex >= 0 ? ranked[myIndex] : { speed: player.speed, accuracy: player.accuracy };
-  const visibleRanked = ranked.slice(0, 10);
+  const visibleRanked = ranked.slice(0, 28);
   const rankAnnouncements = visibleRanked.slice(0, 5).map((student, index) => {
     const rankKey = `${index + 1}:${student.name}`;
     const isNewRank = !announcedRanks.has(rankKey);
@@ -1158,6 +1175,7 @@ function retryBattle() {
   eliminatedPlayers.delete(playerName.textContent.trim());
   lastAccuracyStatus = "safe";
   prepareBattle();
+  setTimeout(() => typingInput.focus(), 80);
   setTickerMessages(["재도전 준비 완료. 교사의 시작 신호를 기다리세요."]);
 }
 
