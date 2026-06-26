@@ -1,6 +1,10 @@
 const TEACHER_PIN = "202603";
 const STORAGE_KEY = "type_io_passages";
 const SUPABASE_CONFIG_KEY = "type_io_supabase_config";
+const DEFAULT_SUPABASE_URL = "";
+const DEFAULT_SUPABASE_ANON_KEY = "";
+const PASSAGES_TABLE = "type_io_passages";
+const ROOMS_TABLE = "type_io_rooms";
 
 const samples = {
   ko: {
@@ -77,6 +81,7 @@ const teacherScreen = document.getElementById("teacherScreen");
 const battleScreen = document.getElementById("battleScreen");
 const studentCodeInput = document.getElementById("studentCodeInput");
 const studentNameInput = document.getElementById("studentNameInput");
+const studentAuthMessage = document.getElementById("studentAuthMessage");
 const teacherPinInput = document.getElementById("teacherPinInput");
 const teacherAuthMessage = document.getElementById("teacherAuthMessage");
 const roomCodeEl = document.getElementById("roomCode");
@@ -173,22 +178,31 @@ function getPassages() {
 }
 
 function getSupabaseConfig() {
+  const saved = (() => {
+    try {
+      return JSON.parse(localStorage.getItem(SUPABASE_CONFIG_KEY) || "{}");
+    } catch {
+      return {};
+    }
+  })();
   return {
-    url: supabaseUrlInput.value.trim().replace(/\/+$/, ""),
-    key: supabaseKeyInput.value.trim(),
-    table: supabaseTableInput.value.trim() || "type_io_passages"
+    url: (supabaseUrlInput.value.trim() || saved.url || DEFAULT_SUPABASE_URL).replace(/\/+$/, ""),
+    key: supabaseKeyInput.value.trim() || saved.key || DEFAULT_SUPABASE_ANON_KEY,
+    table: supabaseTableInput.value.trim() || saved.table || PASSAGES_TABLE
   };
 }
 
 function loadSupabaseConfig() {
   try {
     const config = JSON.parse(localStorage.getItem(SUPABASE_CONFIG_KEY) || "{}");
-    supabaseUrlInput.value = config.url || "";
-    supabaseKeyInput.value = config.key || "";
-    supabaseTableInput.value = config.table || "type_io_passages";
+    supabaseUrlInput.value = config.url || DEFAULT_SUPABASE_URL;
+    supabaseKeyInput.value = config.key || DEFAULT_SUPABASE_ANON_KEY;
+    supabaseTableInput.value = config.table || PASSAGES_TABLE;
     driveState.textContent = config.url && config.key ? "Supabase 설정됨" : "Supabase 미설정";
   } catch {
-    supabaseTableInput.value = "type_io_passages";
+    supabaseUrlInput.value = DEFAULT_SUPABASE_URL;
+    supabaseKeyInput.value = DEFAULT_SUPABASE_ANON_KEY;
+    supabaseTableInput.value = PASSAGES_TABLE;
   }
 }
 
@@ -224,6 +238,10 @@ function hasSupabaseConfig() {
   return Boolean(config.url && config.key && config.table);
 }
 
+function hasDefaultSupabaseConfig() {
+  return Boolean(DEFAULT_SUPABASE_URL && DEFAULT_SUPABASE_ANON_KEY);
+}
+
 async function requestSupabase(path, options = {}) {
   const config = getSupabaseConfig();
   const response = await fetch(`${config.url}/rest/v1/${path}`, {
@@ -241,6 +259,35 @@ async function requestSupabase(path, options = {}) {
   }
   if (response.status === 204) return null;
   return response.json();
+}
+
+async function verifyRoomCode(inputCode) {
+  if (!hasSupabaseConfig()) return inputCode === roomCode;
+  try {
+    const rows = await requestSupabase(`${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(inputCode)}&select=room_code,status&limit=1`);
+    return Array.isArray(rows) && rows.length > 0;
+  } catch {
+    return inputCode === roomCode;
+  }
+}
+
+async function saveRoomCodeToSupabase() {
+  if (!hasSupabaseConfig()) return false;
+  await requestSupabase(`${ROOMS_TABLE}?on_conflict=room_code`, {
+    method: "POST",
+    headers: {
+      Prefer: "resolution=merge-duplicates,return=representation"
+    },
+    body: JSON.stringify({
+      room_code: roomCode,
+      active_subject: currentPassage.subject,
+      active_title: currentPassage.title,
+      active_passage: currentPassage.text,
+      status: "waiting",
+      updated_at: new Date().toISOString()
+    })
+  });
+  return true;
 }
 
 function cacheCurrentPassage(passage) {
@@ -705,13 +752,19 @@ function animateParticles() {
   requestAnimationFrame(animateParticles);
 }
 
-document.getElementById("studentEnterBtn").addEventListener("click", () => {
-  const codeOk = studentCodeInput.value.trim().toUpperCase() === roomCode;
+document.getElementById("studentEnterBtn").addEventListener("click", async () => {
+  const inputCode = studentCodeInput.value.trim();
   const name = studentNameInput.value.trim() || "학생";
+  studentAuthMessage.textContent = "입장코드를 확인하는 중입니다...";
+  const codeOk = await verifyRoomCode(inputCode);
   if (!codeOk) {
+    studentAuthMessage.textContent = hasDefaultSupabaseConfig()
+      ? "입장코드가 맞지 않습니다."
+      : "입장코드가 맞지 않습니다. 학생용 배포 설정을 확인하세요.";
     studentCodeInput.focus();
     return;
   }
+  studentAuthMessage.textContent = "";
   isTeacherBattle = false;
   playerName.textContent = name;
   prepareBattle();
@@ -735,7 +788,7 @@ document.getElementById("newRoomBtn").addEventListener("click", () => {
   customRoomCodeInput.focus();
 });
 
-document.getElementById("applyRoomCodeBtn").addEventListener("click", () => {
+document.getElementById("applyRoomCodeBtn").addEventListener("click", async () => {
   const nextCode = customRoomCodeInput.value.trim();
   if (!/^\d{4,}$/.test(nextCode)) {
     roomCodeMessage.textContent = "학생 입장코드는 숫자 4자리 이상이어야 합니다.";
@@ -744,7 +797,15 @@ document.getElementById("applyRoomCodeBtn").addEventListener("click", () => {
   }
   roomCode = nextCode;
   if (roomCodeEl) roomCodeEl.textContent = roomCode;
-  roomCodeMessage.textContent = `학생 입장코드가 ${roomCode}(으)로 설정되었습니다.`;
+  roomCodeMessage.textContent = "입장코드를 저장하는 중입니다...";
+  try {
+    const saved = await saveRoomCodeToSupabase();
+    roomCodeMessage.textContent = saved
+      ? `학생 입장코드가 ${roomCode}(으)로 Supabase에 저장되었습니다.`
+      : `학생 입장코드가 ${roomCode}(으)로 이 브라우저에만 설정되었습니다.`;
+  } catch {
+    roomCodeMessage.textContent = `학생 입장코드가 ${roomCode}(으)로 이 브라우저에만 설정되었습니다. Supabase 저장은 실패했습니다.`;
+  }
 });
 
 document.getElementById("savePassageBtn").addEventListener("click", () => {
