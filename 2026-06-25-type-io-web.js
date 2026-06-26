@@ -147,6 +147,7 @@ const typingInput = document.getElementById("typingInput");
 const totalCharsLabel = document.getElementById("totalCharsLabel");
 const typedCharsLabel = document.getElementById("typedCharsLabel");
 const runnerBoy = document.getElementById("runnerBoy");
+const leaderRunner = document.getElementById("leaderRunner");
 const koOverlay = document.getElementById("koOverlay");
 const resultTitle = document.getElementById("resultTitle");
 const resultSummary = document.getElementById("resultSummary");
@@ -812,9 +813,6 @@ function formatVisibleSpaces(text) {
 function updateLineView() {
   const typed = typingInput.value;
   const target = lines[currentLineIndex] || "";
-  passageWindow.classList.remove("is-advancing");
-  void passageWindow.offsetWidth;
-  passageWindow.classList.add("is-advancing");
   previousLine.innerHTML = Array.from(target).map((char, index) => {
     let className = "pending-char";
     if (index < typed.length) className = typed[index] === char ? "done-char" : "bad-char";
@@ -857,6 +855,8 @@ function updateStats() {
   speedText.textContent = `${speed}타`;
   progressFill.style.width = `${progress}%`;
   if (runnerBoy) runnerBoy.style.left = `${Math.min(96, Math.max(0, progress))}%`;
+  const leaderProgress = Math.max(progress, ...uniqueActivePlayers(remotePlayers).map((student) => Number(student.progress || 0)));
+  if (leaderRunner) leaderRunner.style.left = `${Math.min(96, Math.max(0, leaderProgress))}%`;
   accuracyText.textContent = `${accuracy}%`;
   typedCharsLabel.textContent = `${typed.length} 자`;
 

@@ -739,6 +739,14 @@ p {
   margin: 0 auto;
 }
 
+#battleScreen:not(.is-teacher-battle) .live-board {
+  grid-template-columns: 150px 210px minmax(0, 1fr);
+}
+
+#battleScreen:not(.is-teacher-battle) .teacher-battle-actions {
+  display: none;
+}
+
 .live-board > div {
   display: grid;
   align-items: center;
@@ -780,7 +788,7 @@ p {
   white-space: nowrap;
   animation: tickerMove 10s linear forwards;
   letter-spacing: 0.08em;
-  font-size: clamp(1.35rem, 2.6vw, 2.2rem);
+  font-size: clamp(1.6rem, 3vw, 2.55rem);
   text-shadow: 0 0 8px rgba(255, 241, 118, 0.9), 0 0 18px rgba(255, 56, 209, 0.38);
 }
 
@@ -1037,7 +1045,7 @@ p {
 }
 
 .passage-window.is-advancing p {
-  animation: lineRise 0.26s ease-out;
+  animation: none;
 }
 
 .done-char {
@@ -1077,7 +1085,7 @@ p {
   border-bottom: 2px dashed rgba(0, 232, 255, 0.35);
 }
 
-#runnerBoy {
+.runner {
   position: absolute;
   left: 0%;
   bottom: 0.1rem;
@@ -1085,6 +1093,31 @@ p {
   font-size: 1.45rem;
   transition: left 0.35s ease;
   filter: drop-shadow(0 0 8px rgba(0, 232, 255, 0.55));
+}
+
+.runner b {
+  position: absolute;
+  left: 50%;
+  bottom: 1.45rem;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  padding: 0.05rem 0.35rem;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.leader-runner {
+  bottom: 0.95rem;
+}
+
+.leader-runner b {
+  color: #120f00;
+  background: var(--yellow);
+}
+
+.my-runner b {
+  color: #fff;
+  background: var(--pink);
 }
 
 .finish-line {
