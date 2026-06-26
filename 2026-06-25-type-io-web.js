@@ -5,6 +5,7 @@ const DEFAULT_SUPABASE_URL = "";
 const DEFAULT_SUPABASE_ANON_KEY = "";
 const PASSAGES_TABLE = "type_io_passages";
 const ROOMS_TABLE = "type_io_rooms";
+const PLAYERS_TABLE = "type_io_players";
 
 const samples = {
   ko: {
@@ -56,6 +57,13 @@ let lastLeaderName = "";
 let announcedRanks = new Set();
 let eliminatedPlayers = new Set();
 let lastAccuracyStatus = "safe";
+let currentPlayerId = "";
+let currentRoomCode = "202603";
+let remotePlayers = [];
+let teacherPollId = 0;
+let roomPollId = 0;
+let lastRoomStatus = "waiting";
+let lastPlayerSyncAt = 0;
 let audioContext;
 let musicTimer = 0;
 let masterGain;
@@ -90,6 +98,7 @@ const studentCodePanel = document.getElementById("studentCodePanel");
 const customRoomCodeInput = document.getElementById("customRoomCodeInput");
 const roomCodeMessage = document.getElementById("roomCodeMessage");
 const subjectSelect = document.getElementById("subjectSelect");
+const passageTitleSelect = document.getElementById("passageTitleSelect");
 const passageTitleInput = document.getElementById("passageTitleInput");
 const textFileInput = document.getElementById("textFileInput");
 const passageTextInput = document.getElementById("passageTextInput");
@@ -130,6 +139,11 @@ const koOverlay = document.getElementById("koOverlay");
 const resultTitle = document.getElementById("resultTitle");
 const resultSummary = document.getElementById("resultSummary");
 const finalRankList = document.getElementById("finalRankList");
+const connectedCount = document.getElementById("connectedCount");
+const teacherStudentList = document.getElementById("teacherStudentList");
+const teacherRankBoard = document.getElementById("teacherRankBoard");
+const teacherRankList = document.getElementById("teacherRankList");
+const teacherRankCount = document.getElementById("teacherRankCount");
 const canvas = document.getElementById("particleCanvas");
 const ctx = canvas.getContext("2d");
 let particles = [];
@@ -138,6 +152,7 @@ function showScreen(screen) {
   [entryScreen, teacherScreen, battleScreen].forEach((node) => {
     node.classList.toggle("is-visible", node === screen);
   });
+  if (screen !== teacherScreen) clearInterval(teacherPollId);
   if (screen === battleScreen) typingInput.focus();
 }
 
@@ -159,6 +174,7 @@ function updateTeacherLabel() {
 function syncTeacherFields() {
   subjectSelect.value = currentPassage.subject;
   passageTitleInput.value = currentPassage.title;
+  if (passageTitleSelect) passageTitleSelect.value = currentPassage.title;
   passageTextInput.value = currentPassage.text;
   passageTextInput.readOnly = true;
   editPassageBtn.textContent = "수정";
@@ -264,10 +280,30 @@ async function requestSupabase(path, options = {}) {
 async function verifyRoomCode(inputCode) {
   if (!hasSupabaseConfig()) return inputCode === roomCode;
   try {
-    const rows = await requestSupabase(`${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(inputCode)}&select=room_code,status&limit=1`);
+    const rows = await requestSupabase(`${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(inputCode)}&select=room_code,active_subject,active_title,active_passage,status&limit=1`);
     return Array.isArray(rows) && rows.length > 0;
   } catch {
     return inputCode === roomCode;
+  }
+}
+
+async function loadActiveRoom(inputCode) {
+  if (!hasSupabaseConfig()) return false;
+  try {
+    const rows = await requestSupabase(`${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(inputCode)}&select=room_code,active_subject,active_title,active_passage,status&limit=1`);
+    const room = Array.isArray(rows) ? rows[0] : null;
+    if (!room || !room.active_passage) return false;
+    currentPassage = {
+      subject: room.active_subject || "국어",
+      title: room.active_title || "배포 지문",
+      source: `${room.active_subject || "교사"} / 교사 배포 지문`,
+      text: room.active_passage
+    };
+    roomCode = room.room_code || inputCode;
+    currentRoomCode = roomCode;
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -290,10 +326,198 @@ async function saveRoomCodeToSupabase() {
   return true;
 }
 
+async function setRoomStatus(status) {
+  if (!hasSupabaseConfig()) return false;
+  await requestSupabase(`${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(roomCode)}`, {
+    method: "PATCH",
+    headers: {
+      Prefer: "return=representation"
+    },
+    body: JSON.stringify({
+      status,
+      started_at: status === "countdown" || status === "playing" ? new Date().toISOString() : null,
+      updated_at: new Date().toISOString()
+    })
+  });
+  lastRoomStatus = status;
+  return true;
+}
+
+function sortPlayers(players) {
+  return [...players]
+    .filter((player) => player.status !== "eliminated" && Number(player.accuracy) > 95)
+    .sort((a, b) => {
+      const aScore = Number(a.progress || 0) * 1000 + Number(a.speed || 0) * 2 + Number(a.accuracy || 0);
+      const bScore = Number(b.progress || 0) * 1000 + Number(b.speed || 0) * 2 + Number(b.accuracy || 0);
+      return bScore - aScore;
+    });
+}
+
+async function fetchPlayers() {
+  if (!hasSupabaseConfig()) return [];
+  const rows = await requestSupabase(`${PLAYERS_TABLE}?room_code=eq.${encodeURIComponent(currentRoomCode)}&select=id,student_name,progress,speed,accuracy,typed_chars,status,updated_at&order=updated_at.desc&limit=60`);
+  remotePlayers = rows || [];
+  return remotePlayers;
+}
+
+function renderTeacherStudents(players = remotePlayers) {
+  const active = players.filter((player) => player.status !== "finished_old");
+  connectedCount.textContent = `${active.length}명`;
+  teacherStudentList.innerHTML = active.length ? active.map((player) => `
+    <li>
+      <b>${escapeHtml(player.student_name || "학생")}</b>
+      <small>진행률 ${player.progress || 0}% / 분당 타자속도 ${player.speed || 0}타 / 정확도 ${player.accuracy || 100}% / ${escapeHtml(player.status || "waiting")}</small>
+    </li>
+  `).join("") : `<li><b>아직 접속한 학생이 없습니다</b><small>학생이 입장하면 자동으로 표시됩니다.</small></li>`;
+}
+
+function renderTeacherRankings(players = remotePlayers) {
+  const ranked = sortPlayers(players).slice(0, 20);
+  teacherRankCount.textContent = `${ranked.length}명`;
+  teacherRankList.innerHTML = ranked.length ? ranked.map((player, index) => `
+    <li class="${index < 3 ? `rank-top-${index + 1}` : ""}">
+      <span>
+        <b>${escapeHtml(player.student_name || "학생")}</b>
+        <small>진행률 ${player.progress || 0}% / 분당 타자속도 ${player.speed || 0}타 / 정확도 ${player.accuracy || 100}%</small>
+      </span>
+      <strong>${escapeHtml(player.status || "playing")}</strong>
+    </li>
+  `).join("") : `<li><span><b>순위 대기 중</b><small>배틀이 시작되면 학생 순위가 표시됩니다.</small></span><strong>-</strong></li>`;
+}
+
+async function refreshTeacherLive() {
+  try {
+    const players = await fetchPlayers();
+    renderTeacherStudents(players);
+    renderTeacherRankings(players);
+  } catch {
+    connectedCount.textContent = "확인 실패";
+  }
+}
+
+function startTeacherPolling() {
+  clearInterval(teacherPollId);
+  refreshTeacherLive();
+  teacherPollId = setInterval(refreshTeacherLive, 2000);
+}
+
+async function registerCurrentPlayer(name) {
+  if (!hasSupabaseConfig()) return;
+  const rows = await requestSupabase(PLAYERS_TABLE, {
+    method: "POST",
+    headers: {
+      Prefer: "return=representation"
+    },
+    body: JSON.stringify({
+      room_code: currentRoomCode,
+      student_name: name,
+      progress: 0,
+      speed: 0,
+      accuracy: 100,
+      typed_chars: 0,
+      status: "waiting",
+      updated_at: new Date().toISOString()
+    })
+  });
+  currentPlayerId = rows?.[0]?.id || "";
+}
+
+async function updateCurrentPlayer(player) {
+  if (!hasSupabaseConfig() || !currentPlayerId) return;
+  await requestSupabase(`${PLAYERS_TABLE}?id=eq.${encodeURIComponent(currentPlayerId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      progress: player.progress,
+      speed: player.speed,
+      accuracy: player.accuracy,
+      typed_chars: player.doneChars,
+      status: player.status || "playing",
+      finished_at: player.status === "finished" ? new Date().toISOString() : null,
+      updated_at: new Date().toISOString()
+    })
+  });
+}
+
+async function pollRoomForStart() {
+  if (!hasSupabaseConfig() || isTeacherBattle) return;
+  try {
+    await fetchPlayers();
+    const rows = await requestSupabase(`${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(currentRoomCode)}&select=status,active_subject,active_title,active_passage&limit=1`);
+    const room = rows?.[0];
+    if (!room) return;
+    if (room.active_passage && (room.active_subject !== currentPassage.subject || room.active_title !== currentPassage.title)) {
+      currentPassage = {
+        subject: room.active_subject || "국어",
+        title: room.active_title || "배포 지문",
+        source: `${room.active_subject || "교사"} / 교사 배포 지문`,
+        text: room.active_passage
+      };
+      prepareBattle();
+    }
+    if (room.status === "countdown" && lastRoomStatus !== "countdown") {
+      lastRoomStatus = "countdown";
+      runCountdownThenStart();
+    }
+  } catch {
+    // 교실 네트워크가 잠깐 흔들려도 학생 입력은 계속 가능하게 둡니다.
+  }
+}
+
+function startRoomPolling() {
+  clearInterval(roomPollId);
+  pollRoomForStart();
+  roomPollId = setInterval(pollRoomForStart, 1500);
+}
+
 function cacheCurrentPassage(passage) {
   const passages = getPassages();
-  passages[passage.subject] = passage;
+  const list = Array.isArray(passages[passage.subject])
+    ? passages[passage.subject]
+    : passages[passage.subject]
+      ? [passages[passage.subject]]
+      : [];
+  const index = list.findIndex((item) => item.title === passage.title);
+  if (index >= 0) list[index] = passage;
+  else list.unshift(passage);
+  passages[passage.subject] = list;
   savePassages(passages);
+}
+
+function getCachedPassagesForSubject(subject) {
+  const value = getPassages()[subject];
+  if (Array.isArray(value)) return value;
+  return value ? [value] : [];
+}
+
+function renderPassageTitleOptions(passages = []) {
+  passageTitleSelect.innerHTML = `<option value="">새 지문 작성</option>${passages.map((passage) => (
+    `<option value="${escapeHtml(passage.title)}">${escapeHtml(passage.title)}</option>`
+  )).join("")}`;
+  const match = passages.find((passage) => passage.title === passageTitleInput.value);
+  passageTitleSelect.value = match ? match.title : "";
+}
+
+async function loadPassageTitlesForSubject() {
+  let passages = [];
+  if (hasSupabaseConfig()) {
+    const config = getSupabaseConfig();
+    try {
+      const rows = await requestSupabase(`${config.table}?subject=eq.${encodeURIComponent(subjectSelect.value)}&select=subject,title,source,body,updated_at&order=updated_at.desc`);
+      passages = (rows || []).map((row) => ({
+        subject: row.subject,
+        title: row.title,
+        source: row.source,
+        text: row.body
+      }));
+      passages.forEach(cacheCurrentPassage);
+    } catch {
+      passages = getCachedPassagesForSubject(subjectSelect.value);
+    }
+  } else {
+    passages = getCachedPassagesForSubject(subjectSelect.value);
+  }
+  renderPassageTitleOptions(passages);
+  return passages;
 }
 
 async function saveCurrentPassage() {
@@ -307,7 +531,7 @@ async function saveCurrentPassage() {
   if (hasSupabaseConfig()) {
     const config = getSupabaseConfig();
     try {
-      await requestSupabase(`${config.table}?on_conflict=subject`, {
+      await requestSupabase(`${config.table}?on_conflict=subject,title`, {
         method: "POST",
         headers: {
           Prefer: "resolution=merge-duplicates,return=representation"
@@ -321,6 +545,8 @@ async function saveCurrentPassage() {
         })
       });
       driveState.textContent = "Supabase 저장 완료";
+      await loadPassageTitlesForSubject();
+      passageTitleSelect.value = currentPassage.title;
     } catch (error) {
       driveState.textContent = "Supabase 실패 - 브라우저 저장";
     }
@@ -337,7 +563,10 @@ async function loadSavedPassage() {
   if (hasSupabaseConfig()) {
     const config = getSupabaseConfig();
     try {
-      const rows = await requestSupabase(`${config.table}?subject=eq.${encodeURIComponent(subjectSelect.value)}&select=subject,title,source,body&limit=1`);
+      const titleQuery = passageTitleSelect.value
+        ? `&title=eq.${encodeURIComponent(passageTitleSelect.value)}`
+        : "";
+      const rows = await requestSupabase(`${config.table}?subject=eq.${encodeURIComponent(subjectSelect.value)}${titleQuery}&select=subject,title,source,body,updated_at&order=updated_at.desc&limit=1`);
       if (rows && rows[0]) {
         saved = {
           subject: rows[0].subject,
@@ -352,7 +581,7 @@ async function loadSavedPassage() {
       driveState.textContent = "Supabase 실패 - 브라우저 저장 확인";
     }
   }
-  saved = saved || getPassages()[subjectSelect.value];
+  saved = saved || getCachedPassagesForSubject(subjectSelect.value).find((passage) => passage.title === passageTitleSelect.value) || getCachedPassagesForSubject(subjectSelect.value)[0];
   currentPassage = saved || (subjectSelect.value === "영어" ? { ...samples.en } : { ...samples.ko, subject: subjectSelect.value });
   syncTeacherFields();
   if (!saved) driveState.textContent = "기본 지문 불러옴";
@@ -371,12 +600,15 @@ function prepareBattle() {
   koOverlay.classList.remove("is-visible");
   typingInput.disabled = false;
   teacherBattleActions.hidden = !isTeacherBattle;
+  teacherRankBoard.hidden = !isTeacherBattle;
+  battleScreen.classList.toggle("is-teacher-battle", isTeacherBattle);
   subjectLabel.textContent = currentPassage.subject;
   battleTitle.textContent = currentPassage.title;
   sourceChip.textContent = currentPassage.source;
   totalCharsLabel.textContent = `${currentPassage.text.replace(/\s/g, "").length} 자`;
   updateLineView();
   updateStats();
+  if (isTeacherBattle) refreshTeacherLive();
   setTickerMessages([
     "순위 안내: 정확도 95% 이하는 순위에서 잠시 제외됩니다.",
     "정확도 96% 이상으로 회복하면 실시간 순위에 다시 등록됩니다.",
@@ -392,11 +624,16 @@ async function publishPassage() {
     source: `${subjectSelect.value} / 교사 배포 지문`,
     text: passageTextInput.value.trim() || samples.ko.text
   };
-  driveState.textContent = "학생 배틀 지문으로 배포됨";
+  try {
+    const saved = await saveRoomCodeToSupabase();
+    driveState.textContent = saved ? "학생 배틀 지문으로 Supabase 배포됨" : "학생 배틀 지문으로 배포됨";
+  } catch {
+    driveState.textContent = "학생 배틀 지문으로 배포됨 - Supabase 방 갱신 실패";
+  }
 }
 
 function escapeHtml(value) {
-  return value.replace(/[&<>"']/g, (char) => ({
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
     "&": "&amp;",
     "<": "&lt;",
     ">": "&gt;",
@@ -470,8 +707,20 @@ function updateStats() {
     setTickerMessages([`정확도 ${accuracy}% 회복! 실시간 순위에 다시 등록됩니다.`]);
   }
   lastAccuracyStatus = accuracy <= 90 ? "eliminated" : accuracy <= 95 ? "excluded" : "safe";
+  const playerStatus = eliminatedPlayers.has(playerNameValue)
+    ? "eliminated"
+    : progress >= 100
+      ? "finished"
+      : startedAt
+        ? "playing"
+        : "waiting";
 
-  renderScores({ progress, accuracy, speed, doneChars });
+  const playerSnapshot = { progress, accuracy, speed, doneChars, status: playerStatus };
+  renderScores(playerSnapshot);
+  if (!isTeacherBattle && currentPlayerId && Date.now() - lastPlayerSyncAt > 1200) {
+    lastPlayerSyncAt = Date.now();
+    updateCurrentPlayer(playerSnapshot).catch(() => {});
+  }
 }
 
 function setTickerMessages(messages) {
@@ -573,6 +822,7 @@ function runCountdownThenStart() {
       countdownCircle.classList.remove("is-start");
       startTensionMusic();
       prepareBattle();
+      if (isTeacherBattle) setRoomStatus("playing");
       setTickerMessages(["배틀이 시작되었습니다. 정확하고 빠르게 입력하세요.", "첫 완주자가 나오는 순간 최종 경쟁이 시작됩니다."]);
     }, 850);
   };
@@ -581,12 +831,23 @@ function runCountdownThenStart() {
 
 function renderScores(player = { progress: 0, accuracy: 100, speed: 0, doneChars: 0 }) {
   const playerNameValue = playerName.textContent.trim() || "나";
+  const remoteCompetitors = remotePlayers
+    .filter((student) => student.id !== currentPlayerId)
+    .map((student) => ({
+      name: student.student_name,
+      speed: Number(student.speed || 0),
+      accuracy: Number(student.accuracy || 100),
+      progress: Number(student.progress || 0),
+      status: student.status,
+      isMe: false,
+      points: Number(student.progress || 0) * 1000 + Number(student.speed || 0) * 2 + Number(student.accuracy || 0)
+    }));
   const competitors = [
-    ...students.map((student) => ({
+    ...(remoteCompetitors.length ? remoteCompetitors : students.map((student) => ({
       ...student,
       isMe: false,
       points: student.progress * 1000 + student.speed * 2 + student.accuracy
-    })),
+    }))),
     {
       name: playerNameValue,
       speed: player.speed,
@@ -597,7 +858,7 @@ function renderScores(player = { progress: 0, accuracy: 100, speed: 0, doneChars
     }
   ];
   const ranked = competitors
-    .filter((student) => student.accuracy > 95 && !eliminatedPlayers.has(student.name))
+    .filter((student) => student.accuracy > 95 && student.status !== "eliminated" && !eliminatedPlayers.has(student.name))
     .sort((a, b) => b.points - a.points);
   const playerEliminated = eliminatedPlayers.has(playerNameValue);
 
@@ -657,6 +918,7 @@ function renderScores(player = { progress: 0, accuracy: 100, speed: 0, doneChars
     </li>
   `).join("");
   previousRankMap = new Map(ranked.map((student, index) => [student.name, index]));
+  if (isTeacherBattle) renderTeacherRankings(remotePlayers);
 }
 
 function getRankTrend(name, index) {
@@ -694,6 +956,7 @@ function buildFinalRanking(player = { progress: 100, accuracy: 100, speed: 0 }) 
 }
 
 function showFinalRanking(player) {
+  updateCurrentPlayer({ progress: 100, accuracy: player.accuracy, speed: player.speed, doneChars: lines.join("").length, status: "finished" }).catch(() => {});
   const ranking = buildFinalRanking(player);
   const myIndex = ranking.findIndex((student) => student.isMe);
   resultTitle.textContent = `${myIndex + 1}등`;
@@ -755,6 +1018,7 @@ function animateParticles() {
 document.getElementById("studentEnterBtn").addEventListener("click", async () => {
   const inputCode = studentCodeInput.value.trim();
   const name = studentNameInput.value.trim() || "학생";
+  currentRoomCode = inputCode;
   studentAuthMessage.textContent = "입장코드를 확인하는 중입니다...";
   const codeOk = await verifyRoomCode(inputCode);
   if (!codeOk) {
@@ -764,10 +1028,15 @@ document.getElementById("studentEnterBtn").addEventListener("click", async () =>
     studentCodeInput.focus();
     return;
   }
+  studentAuthMessage.textContent = "배포된 지문을 불러오는 중입니다...";
+  await loadActiveRoom(inputCode);
+  studentAuthMessage.textContent = "학생 정보를 등록하는 중입니다...";
+  await registerCurrentPlayer(name).catch(() => {});
   studentAuthMessage.textContent = "";
   isTeacherBattle = false;
   playerName.textContent = name;
   prepareBattle();
+  startRoomPolling();
   showScreen(battleScreen);
 });
 
@@ -778,7 +1047,10 @@ document.getElementById("teacherEnterBtn").addEventListener("click", () => {
     return;
   }
   teacherAuthMessage.textContent = "";
+  currentRoomCode = roomCode;
   syncTeacherFields();
+  loadPassageTitlesForSubject();
+  startTeacherPolling();
   showScreen(teacherScreen);
 });
 
@@ -796,6 +1068,7 @@ document.getElementById("applyRoomCodeBtn").addEventListener("click", async () =
     return;
   }
   roomCode = nextCode;
+  currentRoomCode = nextCode;
   if (roomCodeEl) roomCodeEl.textContent = roomCode;
   roomCodeMessage.textContent = "입장코드를 저장하는 중입니다...";
   try {
@@ -811,9 +1084,8 @@ document.getElementById("applyRoomCodeBtn").addEventListener("click", async () =
 document.getElementById("savePassageBtn").addEventListener("click", () => {
   saveCurrentPassage();
 });
-document.getElementById("loadPassageBtn").addEventListener("click", () => {
-  loadSavedPassage();
-});
+const loadPassageBtn = document.getElementById("loadPassageBtn");
+if (loadPassageBtn) loadPassageBtn.addEventListener("click", loadSavedPassage);
 document.getElementById("saveSupabaseConfigBtn").addEventListener("click", saveSupabaseConfig);
 document.getElementById("saveSupabaseConfigInlineBtn").addEventListener("click", saveSupabaseConfig);
 document.getElementById("testSupabaseBtn").addEventListener("click", testSupabaseConnection);
@@ -826,22 +1098,27 @@ publishPassageBtn.addEventListener("click", publishPassage);
 teacherBattleBtn.addEventListener("click", () => {
   publishPassage().then(() => {
     isTeacherBattle = true;
+    currentRoomCode = roomCode;
     playerName.textContent = studentNameInput.value.trim() || "교사";
     prepareBattle();
+    startTeacherPolling();
     showScreen(battleScreen);
   });
 });
 document.getElementById("goBattleBtn").addEventListener("click", () => {
   saveCurrentPassage().then(() => {
     isTeacherBattle = true;
+    currentRoomCode = roomCode;
     playerName.textContent = studentNameInput.value.trim() || "교사";
     prepareBattle();
+    startTeacherPolling();
     showScreen(battleScreen);
   });
 });
 
 battleStartBtn.addEventListener("click", () => {
   if (!isTeacherBattle) return;
+  setRoomStatus("countdown").catch(() => {});
   runCountdownThenStart();
 });
 
@@ -851,11 +1128,31 @@ teacherSettingsBtn.addEventListener("click", () => {
   showScreen(teacherScreen);
 });
 
-subjectSelect.addEventListener("change", () => {
-  loadSavedPassage();
+subjectSelect.addEventListener("change", async () => {
+  const passages = await loadPassageTitlesForSubject();
+  if (passages[0]) {
+    currentPassage = passages[0];
+    syncTeacherFields();
+    passageTitleSelect.value = currentPassage.title;
+  } else {
+    currentPassage = subjectSelect.value === "영어" ? { ...samples.en } : { ...samples.ko, subject: subjectSelect.value, title: "새 지문" };
+    syncTeacherFields();
+  }
 });
 
 passageTitleInput.addEventListener("input", updateTeacherLabel);
+
+passageTitleSelect.addEventListener("change", () => {
+  if (!passageTitleSelect.value) {
+    passageTitleInput.value = "";
+    passageTextInput.value = "";
+    passageTextInput.readOnly = false;
+    editPassageBtn.textContent = "수정 중";
+    updateTeacherLabel();
+    return;
+  }
+  loadSavedPassage();
+});
 
 async function extractPdfText(file) {
   const buffer = await file.arrayBuffer();
