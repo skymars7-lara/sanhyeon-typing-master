@@ -100,6 +100,7 @@ const roomCodeMessage = document.getElementById("roomCodeMessage");
 const subjectSelect = document.getElementById("subjectSelect");
 const passageTitleSelect = document.getElementById("passageTitleSelect");
 const passageTitleInput = document.getElementById("passageTitleInput");
+const newPassageBtn = document.getElementById("newPassageBtn");
 const textFileInput = document.getElementById("textFileInput");
 const passageTextInput = document.getElementById("passageTextInput");
 const editPassageBtn = document.getElementById("editPassageBtn");
@@ -181,6 +182,24 @@ function syncTeacherFields() {
   updateTeacherLabel();
 }
 
+function startNewPassage() {
+  const nextTitle = window.prompt("새 지문 제목을 입력하세요.", "");
+  if (!nextTitle || !nextTitle.trim()) return;
+  currentPassage = {
+    subject: subjectSelect.value,
+    title: nextTitle.trim(),
+    source: `${subjectSelect.value} / 교사 작성 지문`,
+    text: ""
+  };
+  passageTitleInput.value = currentPassage.title;
+  passageTitleSelect.value = "";
+  passageTextInput.value = "";
+  passageTextInput.readOnly = false;
+  editPassageBtn.textContent = "수정 중";
+  updateTeacherLabel();
+  passageTextInput.focus();
+}
+
 function savePassages(passages) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(passages));
 }
@@ -228,6 +247,11 @@ function saveSupabaseConfig() {
   supabaseUrlInput.value = config.url;
   supabaseTableInput.value = config.table;
   driveState.textContent = config.url && config.key && config.table ? "Supabase 설정 저장됨" : "Supabase 정보가 비어 있음";
+}
+
+function hasRuntimeSupabaseConfig() {
+  const config = getSupabaseConfig();
+  return Boolean(config.url && config.key);
 }
 
 async function testSupabaseConnection() {
@@ -1022,9 +1046,9 @@ document.getElementById("studentEnterBtn").addEventListener("click", async () =>
   studentAuthMessage.textContent = "입장코드를 확인하는 중입니다...";
   const codeOk = await verifyRoomCode(inputCode);
   if (!codeOk) {
-    studentAuthMessage.textContent = hasDefaultSupabaseConfig()
+    studentAuthMessage.textContent = hasRuntimeSupabaseConfig()
       ? "입장코드가 맞지 않습니다."
-      : "입장코드가 맞지 않습니다. 학생용 배포 설정을 확인하세요.";
+      : "배포 사이트에 Supabase 기본 설정이 없어 입장코드를 확인할 수 없습니다.";
     studentCodeInput.focus();
     return;
   }
@@ -1141,14 +1165,11 @@ subjectSelect.addEventListener("change", async () => {
 });
 
 passageTitleInput.addEventListener("input", updateTeacherLabel);
+newPassageBtn.addEventListener("click", startNewPassage);
 
 passageTitleSelect.addEventListener("change", () => {
   if (!passageTitleSelect.value) {
-    passageTitleInput.value = "";
-    passageTextInput.value = "";
-    passageTextInput.readOnly = false;
-    editPassageBtn.textContent = "수정 중";
-    updateTeacherLabel();
+    startNewPassage();
     return;
   }
   loadSavedPassage();
