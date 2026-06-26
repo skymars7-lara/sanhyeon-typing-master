@@ -145,6 +145,7 @@ const passageWindow = document.getElementById("passageWindow");
 const typingInput = document.getElementById("typingInput");
 const totalCharsLabel = document.getElementById("totalCharsLabel");
 const typedCharsLabel = document.getElementById("typedCharsLabel");
+const runnerBoy = document.getElementById("runnerBoy");
 const koOverlay = document.getElementById("koOverlay");
 const resultTitle = document.getElementById("resultTitle");
 const resultSummary = document.getElementById("resultSummary");
@@ -749,7 +750,7 @@ function prepareBattle() {
   subjectLabel.textContent = currentPassage.subject;
   battleTitle.textContent = currentPassage.title;
   sourceChip.textContent = currentPassage.source;
-  totalCharsLabel.textContent = `${currentPassage.text.replace(/\s/g, "").length} 자`;
+  if (totalCharsLabel) totalCharsLabel.textContent = "";
   updateLineView();
   updateStats();
   if (isTeacherBattle) refreshTeacherLive();
@@ -787,7 +788,9 @@ function escapeHtml(value) {
 }
 
 function visibleChar(char) {
-  return char === " " ? "␣" : char;
+  if (char === " ") return "·";
+  if (char === "\n") return "↵";
+  return char;
 }
 
 function formatVisibleSpaces(text) {
@@ -805,7 +808,7 @@ function updateLineView() {
     if (index < typed.length) className = typed[index] === char ? "done-char" : "bad-char";
     if (char === " ") className += " space-char";
     return `<span class="${className}">${escapeHtml(visibleChar(char))}</span>`;
-  }).join("");
+  }).join("") + `<span class="enter-char">↵</span>`;
   targetLine.textContent = formatVisibleSpaces(lines[currentLineIndex + 1] || "");
   nextLine.textContent = formatVisibleSpaces(lines[currentLineIndex + 2] || "");
 }
@@ -841,6 +844,7 @@ function updateStats() {
   progressText.textContent = `${progress}%`;
   speedText.textContent = `${speed}타`;
   progressFill.style.width = `${progress}%`;
+  if (runnerBoy) runnerBoy.style.left = `${Math.min(96, Math.max(0, progress))}%`;
   accuracyText.textContent = `${accuracy}%`;
   typedCharsLabel.textContent = `${typed.length} 자`;
 
@@ -980,6 +984,7 @@ function runCountdownThenStart() {
       startTensionMusic();
       prepareBattle();
       if (isTeacherBattle) setRoomStatus("playing");
+      if (!isTeacherBattle) typingInput.focus();
       setTickerMessages(["배틀이 시작되었습니다. 정확하고 빠르게 입력하세요.", "첫 완주자가 나오는 순간 최종 경쟁이 시작됩니다."]);
     }, 850);
   };
@@ -1374,7 +1379,14 @@ typingInput.addEventListener("input", () => {
   const typed = typingInput.value;
   const lastIndex = typed.length - 1;
   if (lastIndex >= 0 && typed[lastIndex] !== target[lastIndex]) mistakeCount += 1;
-  if (typed === target) {
+  if (typed.endsWith("\n")) {
+    const typedLine = typed.replace(/\n$/, "");
+    if (typedLine !== target) {
+      typingInput.value = typedLine;
+      updateLineView();
+      updateStats();
+      return;
+    }
     spawnParticles();
     if (currentLineIndex >= lines.length - 1) {
       const finalAccuracy = calculateAccuracy();

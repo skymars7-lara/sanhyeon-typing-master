@@ -1056,15 +1056,45 @@ p {
 }
 
 .space-char {
-  display: inline-grid;
-  place-items: center;
-  min-width: 0.95em;
-  margin: 0 0.08em;
-  border-radius: 4px;
-  color: #041018;
-  background: rgba(255, 209, 102, 0.84);
+  color: rgba(255, 209, 102, 0.95);
   font-weight: 900;
-  text-shadow: none;
+  text-shadow: 0 0 10px rgba(255, 209, 102, 0.35);
+}
+
+.enter-char {
+  margin-left: 0.35em;
+  color: var(--cyan);
+  font-weight: 900;
+  text-shadow: 0 0 12px rgba(0, 232, 255, 0.55);
+}
+
+.runner-track {
+  position: absolute;
+  left: 2rem;
+  right: 2rem;
+  bottom: 0.9rem;
+  height: 2rem;
+  border-bottom: 2px dashed rgba(0, 232, 255, 0.35);
+}
+
+#runnerBoy {
+  position: absolute;
+  left: 0%;
+  bottom: 0.1rem;
+  transform: translateX(-50%);
+  font-size: 1.45rem;
+  transition: left 0.35s ease;
+  filter: drop-shadow(0 0 8px rgba(0, 232, 255, 0.55));
+}
+
+.finish-line {
+  position: absolute;
+  right: 0;
+  bottom: 0.15rem;
+  border-left: 3px solid var(--yellow);
+  padding-left: 0.4rem;
+  color: var(--yellow);
+  font-weight: 900;
 }
 
 #typingInput {
