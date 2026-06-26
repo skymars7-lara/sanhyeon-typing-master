@@ -8,6 +8,7 @@ const DEFAULT_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3Mi
 const PASSAGES_TABLE = "type_io_passages";
 const ROOMS_TABLE = "type_io_rooms";
 const PLAYERS_TABLE = "type_io_players";
+const PLAYER_STALE_MS = 3 * 60 * 1000;
 
 const samples = {
   ko: {
@@ -402,16 +403,7 @@ async function setRoomStatus(status) {
 async function resetRoomPlayers() {
   if (!hasSupabaseConfig()) return;
   await requestSupabase(`${PLAYERS_TABLE}?room_code=eq.${encodeURIComponent(currentRoomCode)}`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      progress: 0,
-      speed: 0,
-      accuracy: 100,
-      typed_chars: 0,
-      status: "waiting",
-      finished_at: null,
-      updated_at: new Date().toISOString()
-    })
+    method: "DELETE"
   });
 }
 
@@ -456,10 +448,15 @@ function isTeacherPlayer(player) {
   return !name || name === "나" || name === "교사" || name.includes("교사");
 }
 
+function isFreshPlayer(player) {
+  const updated = Date.parse(player?.updated_at || "") || 0;
+  return Date.now() - updated < PLAYER_STALE_MS;
+}
+
 function uniqueActivePlayers(players = []) {
   const latest = new Map();
   players
-    .filter((player) => !isTeacherPlayer(player))
+    .filter((player) => !isTeacherPlayer(player) && isFreshPlayer(player))
     .forEach((player) => {
       const key = String(player.student_name || "").trim();
       const previous = latest.get(key);
@@ -513,6 +510,9 @@ function startTeacherPolling() {
 
 async function registerCurrentPlayer(name) {
   if (!hasSupabaseConfig()) return;
+  await requestSupabase(`${PLAYERS_TABLE}?room_code=eq.${encodeURIComponent(currentRoomCode)}&student_name=eq.${encodeURIComponent(name)}`, {
+    method: "DELETE"
+  }).catch(() => {});
   const rows = await requestSupabase(PLAYERS_TABLE, {
     method: "POST",
     headers: {
@@ -572,6 +572,18 @@ async function updateCurrentPlayer(player) {
       updated_at: new Date().toISOString()
     })
   });
+}
+
+function deleteCurrentPlayerOnExit() {
+  if (!hasSupabaseConfig() || !currentPlayerId) return;
+  const config = getSupabaseConfig();
+  const url = `${config.url}/rest/v1/${PLAYERS_TABLE}?id=eq.${encodeURIComponent(currentPlayerId)}`;
+  const headers = {
+    apikey: config.key,
+    Authorization: `Bearer ${config.key}`,
+    "Content-Type": "application/json"
+  };
+  fetch(url, { method: "DELETE", headers, keepalive: true }).catch(() => {});
 }
 
 async function pollRoomForStart() {
@@ -1426,6 +1438,7 @@ langToggleBtn.addEventListener("click", () => {
 });
 
 window.addEventListener("resize", resizeCanvas);
+window.addEventListener("pagehide", deleteCurrentPlayerOnExit);
 
 loadSupabaseConfig();
 syncTeacherFields();
