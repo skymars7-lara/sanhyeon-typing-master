@@ -53,6 +53,7 @@ let isTeacherBattle = false;
 let previousRankMap = new Map();
 let tickerMessages = [];
 let tickerIndex = 0;
+let tickerSignature = "";
 let lastLeaderName = "";
 let announcedRanks = new Set();
 let eliminatedPlayers = new Set();
@@ -666,6 +667,14 @@ function escapeHtml(value) {
   })[char]);
 }
 
+function visibleChar(char) {
+  return char === " " ? "␣" : char;
+}
+
+function formatVisibleSpaces(text) {
+  return Array.from(text || "").map(visibleChar).join("");
+}
+
 function updateLineView() {
   const typed = typingInput.value;
   const target = lines[currentLineIndex] || "";
@@ -675,10 +684,11 @@ function updateLineView() {
   previousLine.innerHTML = Array.from(target).map((char, index) => {
     let className = "pending-char";
     if (index < typed.length) className = typed[index] === char ? "done-char" : "bad-char";
-    return `<span class="${className}">${escapeHtml(char)}</span>`;
+    if (char === " ") className += " space-char";
+    return `<span class="${className}">${escapeHtml(visibleChar(char))}</span>`;
   }).join("");
-  targetLine.textContent = lines[currentLineIndex + 1] || "";
-  nextLine.textContent = lines[currentLineIndex + 2] || "";
+  targetLine.textContent = formatVisibleSpaces(lines[currentLineIndex + 1] || "");
+  nextLine.textContent = formatVisibleSpaces(lines[currentLineIndex + 2] || "");
 }
 
 function calculateAccuracy() {
@@ -748,9 +758,13 @@ function updateStats() {
 }
 
 function setTickerMessages(messages) {
-  tickerMessages = withCheerArts(messages.filter(Boolean));
+  const baseMessages = messages.filter(Boolean);
+  const nextSignature = baseMessages.join("||");
+  if (nextSignature === tickerSignature && tickerMessages.length) return;
+  tickerSignature = nextSignature;
+  tickerMessages = withCheerArts(baseMessages);
   if (!tickerMessages.length) return;
-  tickerIndex %= tickerMessages.length;
+  tickerIndex = 0;
   applyTickerMessage(tickerMessages[tickerIndex]);
   restartTickerAnimation();
 }

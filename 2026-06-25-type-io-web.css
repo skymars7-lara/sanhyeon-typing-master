@@ -1041,6 +1041,18 @@ p {
   color: rgba(237, 246, 255, 0.52);
 }
 
+.space-char {
+  display: inline-grid;
+  place-items: center;
+  min-width: 0.95em;
+  margin: 0 0.08em;
+  border-radius: 4px;
+  color: #041018;
+  background: rgba(255, 209, 102, 0.84);
+  font-weight: 900;
+  text-shadow: none;
+}
+
 #typingInput {
   min-height: 0;
   height: 100%;
