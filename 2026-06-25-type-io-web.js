@@ -1,6 +1,8 @@
 const TEACHER_PIN = "202603";
 const STORAGE_KEY = "type_io_passages";
 const SUPABASE_CONFIG_KEY = "type_io_supabase_config";
+const SESSION_KEY = "type_io_session";
+const HIDE_RULES_KEY = "type_io_hide_rules";
 const DEFAULT_SUPABASE_URL = "https://xhjhrxhddzddwytenubc.supabase.co";
 const DEFAULT_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhoamhyeGhkZHpkZHd5dGVudWJjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI0MTM2MzQsImV4cCI6MjA5Nzk4OTYzNH0.Z5wv2mi0VwEguBSh8AJG3ju2ezXH8nT_PI5k6nHWPTU";
 const PASSAGES_TABLE = "type_io_passages";
@@ -130,6 +132,10 @@ const teacherSettingsBtn = document.getElementById("teacherSettingsBtn");
 const teacherBattleActions = document.querySelector(".teacher-battle-actions");
 const countdownOverlay = document.getElementById("countdownOverlay");
 const countdownCircle = document.getElementById("countdownCircle");
+const rulesModal = document.getElementById("rulesModal");
+const closeRulesBtn = document.getElementById("closeRulesBtn");
+const hideRulesCheck = document.getElementById("hideRulesCheck");
+const retryBattleBtn = document.getElementById("retryBattleBtn");
 const previousLine = document.getElementById("previousLine");
 const targetLine = document.getElementById("targetLine");
 const nextLine = document.getElementById("nextLine");
@@ -156,6 +162,28 @@ function showScreen(screen) {
   });
   if (screen !== teacherScreen) clearInterval(teacherPollId);
   if (screen === battleScreen) typingInput.focus();
+}
+
+function saveSession(role, data = {}) {
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ role, ...data }));
+}
+
+function getSession() {
+  try {
+    return JSON.parse(localStorage.getItem(SESSION_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function showRulesIfNeeded() {
+  if (localStorage.getItem(HIDE_RULES_KEY) === "1") return;
+  rulesModal.hidden = false;
+}
+
+function closeRules() {
+  if (hideRulesCheck.checked) localStorage.setItem(HIDE_RULES_KEY, "1");
+  rulesModal.hidden = true;
 }
 
 function makeCode() {
@@ -445,6 +473,32 @@ async function registerCurrentPlayer(name) {
     })
   });
   currentPlayerId = rows?.[0]?.id || "";
+}
+
+async function enterStudentBattle(inputCode, name, options = {}) {
+  currentRoomCode = inputCode;
+  studentAuthMessage.textContent = options.silent ? "" : "입장코드를 확인하는 중입니다...";
+  const codeOk = await verifyRoomCode(inputCode);
+  if (!codeOk) {
+    studentAuthMessage.textContent = hasRuntimeSupabaseConfig()
+      ? "입장코드가 맞지 않습니다."
+      : "배포 사이트에 Supabase 기본 설정이 없어 입장코드를 확인할 수 없습니다.";
+    studentCodeInput.focus();
+    return false;
+  }
+  studentAuthMessage.textContent = options.silent ? "" : "배포된 지문을 불러오는 중입니다...";
+  await loadActiveRoom(inputCode);
+  studentAuthMessage.textContent = options.silent ? "" : "학생 정보를 등록하는 중입니다...";
+  await registerCurrentPlayer(name).catch(() => {});
+  saveSession("student", { roomCode: inputCode, name });
+  studentAuthMessage.textContent = "";
+  isTeacherBattle = false;
+  playerName.textContent = name;
+  prepareBattle();
+  startRoomPolling();
+  showScreen(battleScreen);
+  showRulesIfNeeded();
+  return true;
 }
 
 async function updateCurrentPlayer(player) {
@@ -881,11 +935,7 @@ function renderScores(player = { progress: 0, accuracy: 100, speed: 0, doneChars
       points: Number(student.progress || 0) * 1000 + Number(student.speed || 0) * 2 + Number(student.accuracy || 0)
     }));
   const competitors = [
-    ...(remoteCompetitors.length ? remoteCompetitors : students.map((student) => ({
-      ...student,
-      isMe: false,
-      points: student.progress * 1000 + student.speed * 2 + student.accuracy
-    }))),
+    ...remoteCompetitors,
     {
       name: playerNameValue,
       speed: player.speed,
@@ -908,7 +958,7 @@ function renderScores(player = { progress: 0, accuracy: 100, speed: 0, doneChars
         ? "정확도 90% 이하 참가자는 탈락 처리됩니다."
         : "정확도 95% 이하 참가자는 실시간 순위에서 잠시 제외됩니다."
     ]);
-    scoreList.innerHTML = "";
+    scoreList.innerHTML = `<li><b>-</b><span><strong>접속한 학생 없음</strong><small>학생이 입장하면 실시간 순위가 표시됩니다.</small></span><em>-</em></li>`;
     return;
   }
 
@@ -978,14 +1028,18 @@ function buildFinalRanking(player = { progress: 100, accuracy: 100, speed: 0 }) 
   const playerNameValue = playerName.textContent.trim() || "나";
   return [
     { name: playerNameValue, speed: player.speed, accuracy: player.accuracy, progress: 100, isMe: true },
-    ...students.map((student, index) => ({
-      ...student,
-      progress: 100,
-      speed: Math.max(120, student.speed - index * 8),
-      accuracy: Math.max(78, student.accuracy - index),
+    ...remotePlayers
+      .filter((student) => student.id !== currentPlayerId)
+      .map((student) => ({
+      name: student.student_name,
+      progress: Number(student.progress || 0),
+      speed: Number(student.speed || 0),
+      accuracy: Number(student.accuracy || 100),
+      status: student.status,
       isMe: false
     }))
   ]
+    .filter((student) => student.accuracy > 95 && student.status !== "eliminated")
     .map((student) => ({
       ...student,
       points: student.speed * 3 + student.accuracy * 8
@@ -998,7 +1052,7 @@ function showFinalRanking(player) {
   const ranking = buildFinalRanking(player);
   const myIndex = ranking.findIndex((student) => student.isMe);
   resultTitle.textContent = `${myIndex + 1}등`;
-  resultSummary.textContent = "모든 학생이 끝까지 타이핑을 마쳤습니다.";
+  resultSummary.textContent = "나와 접속한 학생 기준 최종 순위입니다.";
   finalRankList.innerHTML = ranking.map((student, index) => `
     <li class="${student.isMe ? "is-me" : ""}">
       <b>${index + 1}등</b>
@@ -1014,6 +1068,23 @@ function showFinalRanking(player) {
   stopTensionMusic();
   koOverlay.classList.add("is-visible");
   typingInput.disabled = true;
+}
+
+function retryBattle() {
+  koOverlay.classList.remove("is-visible");
+  eliminatedPlayers.delete(playerName.textContent.trim());
+  lastAccuracyStatus = "safe";
+  prepareBattle();
+  setTickerMessages(["재도전 준비 완료. 교사의 시작 신호를 기다리세요."]);
+}
+
+async function restoreSession() {
+  const session = getSession();
+  if (session.role === "student" && session.roomCode && session.name) {
+    studentCodeInput.value = session.roomCode;
+    studentNameInput.value = session.name;
+    await enterStudentBattle(session.roomCode, session.name, { silent: true });
+  }
 }
 
 function spawnParticles() {
@@ -1056,26 +1127,7 @@ function animateParticles() {
 document.getElementById("studentEnterBtn").addEventListener("click", async () => {
   const inputCode = studentCodeInput.value.trim();
   const name = studentNameInput.value.trim() || "학생";
-  currentRoomCode = inputCode;
-  studentAuthMessage.textContent = "입장코드를 확인하는 중입니다...";
-  const codeOk = await verifyRoomCode(inputCode);
-  if (!codeOk) {
-    studentAuthMessage.textContent = hasRuntimeSupabaseConfig()
-      ? "입장코드가 맞지 않습니다."
-      : "배포 사이트에 Supabase 기본 설정이 없어 입장코드를 확인할 수 없습니다.";
-    studentCodeInput.focus();
-    return;
-  }
-  studentAuthMessage.textContent = "배포된 지문을 불러오는 중입니다...";
-  await loadActiveRoom(inputCode);
-  studentAuthMessage.textContent = "학생 정보를 등록하는 중입니다...";
-  await registerCurrentPlayer(name).catch(() => {});
-  studentAuthMessage.textContent = "";
-  isTeacherBattle = false;
-  playerName.textContent = name;
-  prepareBattle();
-  startRoomPolling();
-  showScreen(battleScreen);
+  await enterStudentBattle(inputCode, name);
 });
 
 document.getElementById("teacherEnterBtn").addEventListener("click", () => {
@@ -1086,6 +1138,7 @@ document.getElementById("teacherEnterBtn").addEventListener("click", () => {
   }
   teacherAuthMessage.textContent = "";
   currentRoomCode = roomCode;
+  saveSession("teacher", { roomCode });
   syncTeacherFields();
   loadPassageTitlesForSubject();
   startTeacherPolling();
@@ -1180,6 +1233,8 @@ subjectSelect.addEventListener("change", async () => {
 
 passageTitleInput.addEventListener("input", updateTeacherLabel);
 newPassageBtn.addEventListener("click", startNewPassage);
+closeRulesBtn.addEventListener("click", closeRules);
+retryBattleBtn.addEventListener("click", retryBattle);
 
 passageTitleSelect.addEventListener("change", () => {
   if (!passageTitleSelect.value) {
@@ -1295,6 +1350,7 @@ loadSupabaseConfig();
 syncTeacherFields();
 resizeCanvas();
 animateParticles();
+restoreSession();
 setInterval(() => {
   if (!tickerWindow) return;
   const sparks = [

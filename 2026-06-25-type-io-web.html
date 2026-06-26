@@ -245,9 +245,20 @@
         <strong id="resultTitle">경기 종료</strong>
         <span id="resultSummary">모든 학생의 최종 순위가 집계되었습니다.</span>
         <ol id="finalRankList" class="final-rank-list"></ol>
+        <button id="retryBattleBtn" class="primary-btn retry-btn" type="button">재도전</button>
       </div>
       <div id="countdownOverlay" class="countdown-overlay" hidden>
         <div id="countdownCircle" class="countdown-circle">3</div>
+      </div>
+      <div id="rulesModal" class="rules-modal" hidden>
+        <article>
+          <h2>타자 대결 규칙</h2>
+          <p>정확도 95% 이하는 순위에서 잠시 제외됩니다.</p>
+          <p>정확도 96% 이상으로 회복하면 다시 순위에 등록됩니다.</p>
+          <p>정확도 90% 이하는 탈락입니다.</p>
+          <label><input id="hideRulesCheck" type="checkbox"> 다시 보지 않기</label>
+          <button id="closeRulesBtn" class="primary-btn" type="button">닫기</button>
+        </article>
       </div>
     </section>
   </main>
