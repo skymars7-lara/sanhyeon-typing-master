@@ -128,6 +128,8 @@ const leaderGapText = document.getElementById("leaderGapText");
 const tickerText = document.getElementById("tickerText");
 const tickerWindow = document.querySelector(".ticker-window");
 const battleStartBtn = document.getElementById("battleStartBtn");
+const battlePauseBtn = document.getElementById("battlePauseBtn");
+const battleRestartBtn = document.getElementById("battleRestartBtn");
 const teacherSettingsBtn = document.getElementById("teacherSettingsBtn");
 const teacherBattleActions = document.querySelector(".teacher-battle-actions");
 const countdownOverlay = document.getElementById("countdownOverlay");
@@ -396,8 +398,43 @@ async function setRoomStatus(status) {
   return true;
 }
 
+async function resetRoomPlayers() {
+  if (!hasSupabaseConfig()) return;
+  await requestSupabase(`${PLAYERS_TABLE}?room_code=eq.${encodeURIComponent(currentRoomCode)}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      progress: 0,
+      speed: 0,
+      accuracy: 100,
+      typed_chars: 0,
+      status: "waiting",
+      finished_at: null,
+      updated_at: new Date().toISOString()
+    })
+  });
+}
+
+async function pauseBattle() {
+  if (!isTeacherBattle) return;
+  await setRoomStatus("paused").catch(() => {});
+  stopTensionMusic();
+  setTickerMessages(["게임이 잠시 멈췄습니다. 교사의 안내를 기다리세요."]);
+}
+
+async function restartBattle() {
+  if (!isTeacherBattle) return;
+  await setRoomStatus("waiting").catch(() => {});
+  await resetRoomPlayers().catch(() => {});
+  remotePlayers = [];
+  previousRankMap = new Map();
+  announcedRanks = new Set();
+  prepareBattle();
+  await refreshTeacherLive();
+  setTickerMessages(["새 경기를 준비합니다. 배틀 시작 버튼을 눌러주세요."]);
+}
+
 function sortPlayers(players) {
-  return [...players]
+  return uniqueActivePlayers(players)
     .filter((player) => player.status !== "eliminated" && Number(player.accuracy) > 95)
     .sort((a, b) => {
       const aScore = Number(a.progress || 0) * 1000 + Number(a.speed || 0) * 2 + Number(a.accuracy || 0);
@@ -409,8 +446,27 @@ function sortPlayers(players) {
 async function fetchPlayers() {
   if (!hasSupabaseConfig()) return [];
   const rows = await requestSupabase(`${PLAYERS_TABLE}?room_code=eq.${encodeURIComponent(currentRoomCode)}&select=id,student_name,progress,speed,accuracy,typed_chars,status,updated_at&order=updated_at.desc&limit=60`);
-  remotePlayers = rows || [];
+  remotePlayers = uniqueActivePlayers(rows || []);
   return remotePlayers;
+}
+
+function isTeacherPlayer(player) {
+  const name = String(player?.student_name || player?.name || "").trim();
+  return !name || name === "나" || name === "교사" || name.includes("교사");
+}
+
+function uniqueActivePlayers(players = []) {
+  const latest = new Map();
+  players
+    .filter((player) => !isTeacherPlayer(player))
+    .forEach((player) => {
+      const key = String(player.student_name || "").trim();
+      const previous = latest.get(key);
+      const currentTime = Date.parse(player.updated_at || "") || 0;
+      const previousTime = Date.parse(previous?.updated_at || "") || 0;
+      if (!previous || currentTime >= previousTime) latest.set(key, player);
+    });
+  return [...latest.values()];
 }
 
 function renderTeacherStudents(players = remotePlayers) {
@@ -536,6 +592,15 @@ async function pollRoomForStart() {
     if (room.status === "countdown" && lastRoomStatus !== "countdown") {
       lastRoomStatus = "countdown";
       runCountdownThenStart();
+    } else if (room.status === "paused") {
+      lastRoomStatus = "paused";
+      typingInput.disabled = true;
+      stopTensionMusic();
+      setTickerMessages(["게임이 멈췄습니다. 교사의 안내를 기다리세요."]);
+    } else if (room.status === "waiting" && lastRoomStatus !== "waiting") {
+      lastRoomStatus = "waiting";
+      prepareBattle();
+      setTickerMessages(["새 경기를 기다리는 중입니다."]);
     }
   } catch {
     // 교실 네트워크가 잠깐 흔들려도 학생 입력은 계속 가능하게 둡니다.
@@ -923,7 +988,7 @@ function runCountdownThenStart() {
 
 function renderScores(player = { progress: 0, accuracy: 100, speed: 0, doneChars: 0 }) {
   const playerNameValue = playerName.textContent.trim() || "나";
-  const remoteCompetitors = remotePlayers
+  const remoteCompetitors = uniqueActivePlayers(remotePlayers)
     .filter((student) => student.id !== currentPlayerId)
     .map((student) => ({
       name: student.student_name,
@@ -936,14 +1001,14 @@ function renderScores(player = { progress: 0, accuracy: 100, speed: 0, doneChars
     }));
   const competitors = [
     ...remoteCompetitors,
-    {
+    ...(isTeacherBattle ? [] : [{
       name: playerNameValue,
       speed: player.speed,
       accuracy: player.accuracy,
       progress: player.progress,
       isMe: true,
       points: player.progress * 1000 + player.speed * 2 + player.accuracy
-    }
+    }])
   ];
   const ranked = competitors
     .filter((student) => student.accuracy > 95 && student.status !== "eliminated" && !eliminatedPlayers.has(student.name))
@@ -1028,7 +1093,7 @@ function buildFinalRanking(player = { progress: 100, accuracy: 100, speed: 0 }) 
   const playerNameValue = playerName.textContent.trim() || "나";
   return [
     { name: playerNameValue, speed: player.speed, accuracy: player.accuracy, progress: 100, isMe: true },
-    ...remotePlayers
+    ...uniqueActivePlayers(remotePlayers)
       .filter((student) => student.id !== currentPlayerId)
       .map((student) => ({
       name: student.student_name,
@@ -1053,7 +1118,8 @@ function showFinalRanking(player) {
   const myIndex = ranking.findIndex((student) => student.isMe);
   resultTitle.textContent = `${myIndex + 1}등`;
   resultSummary.textContent = "나와 접속한 학생 기준 최종 순위입니다.";
-  finalRankList.innerHTML = ranking.map((student, index) => `
+  const visibleRanking = ranking.slice(0, 10);
+  finalRankList.innerHTML = visibleRanking.map((student, index) => `
     <li class="${student.isMe ? "is-me" : ""}">
       <b>${index + 1}등</b>
       <span>${student.isMe ? "나" : student.name}</span>
@@ -1212,6 +1278,9 @@ battleStartBtn.addEventListener("click", () => {
   setRoomStatus("countdown").catch(() => {});
   runCountdownThenStart();
 });
+
+battlePauseBtn.addEventListener("click", pauseBattle);
+battleRestartBtn.addEventListener("click", restartBattle);
 
 teacherSettingsBtn.addEventListener("click", () => {
   if (!isTeacherBattle) return;

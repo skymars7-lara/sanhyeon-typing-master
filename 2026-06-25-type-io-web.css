@@ -733,7 +733,7 @@ p {
 
 .live-board {
   display: grid;
-  grid-template-columns: 160px 230px minmax(0, 1fr) 130px;
+  grid-template-columns: 150px 210px minmax(0, 1fr) 210px;
   gap: 0.75rem;
   width: 100%;
   margin: 0 auto;
@@ -828,7 +828,7 @@ p {
 
 .teacher-battle-actions {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.35rem;
 }
 
@@ -837,6 +837,8 @@ p {
 }
 
 .battle-start-btn,
+.battle-pause-btn,
+.battle-restart-btn,
 .battle-settings-btn {
   align-self: stretch;
   border: 1px solid rgba(255, 209, 102, 0.62);
@@ -845,6 +847,18 @@ p {
   background: linear-gradient(90deg, var(--yellow), #fff176);
   font-weight: 900;
   box-shadow: 0 0 22px rgba(255, 209, 102, 0.18);
+}
+
+.battle-pause-btn {
+  border-color: rgba(255, 56, 209, 0.45);
+  color: #fff;
+  background: linear-gradient(90deg, #ff5a93, var(--pink));
+}
+
+.battle-restart-btn {
+  border-color: rgba(118, 255, 122, 0.5);
+  color: #03101a;
+  background: linear-gradient(90deg, var(--green), #d7ff73);
 }
 
 .battle-settings-btn {
@@ -1126,7 +1140,7 @@ p {
     rgba(3, 7, 18, 0.92);
   color: #fff;
   text-align: center;
-  padding: 2rem;
+  padding: 1rem;
 }
 
 .ko-overlay.is-visible {
@@ -1134,28 +1148,30 @@ p {
 }
 
 .ko-overlay strong {
-  font-size: clamp(2.5rem, 7vw, 5.5rem);
+  font-size: clamp(2rem, 5.5vw, 4.4rem);
   text-shadow: 0 0 26px var(--cyan);
 }
 
 .final-rank-list {
   display: grid;
-  gap: 0.65rem;
+  gap: 0.42rem;
   width: min(860px, 94vw);
-  margin: 1rem 0;
+  max-height: 56vh;
+  margin: 0.7rem 0;
   padding: 0;
   list-style: none;
+  overflow: hidden;
 }
 
 .final-rank-list li {
   display: grid;
-  grid-template-columns: 5rem minmax(0, 1fr) minmax(10rem, auto);
+  grid-template-columns: 4.5rem minmax(0, 1fr) minmax(8rem, auto);
   align-items: center;
   gap: 0.7rem;
   border: 1px solid rgba(255, 255, 255, 0.22);
   border-left: 4px solid var(--cyan);
   border-radius: 8px;
-  padding: 0.8rem 1rem;
+  padding: 0.55rem 0.85rem;
   background: rgba(0, 0, 0, 0.32);
   text-align: center;
 }
@@ -1174,6 +1190,7 @@ p {
 
 .retry-btn {
   min-width: 12rem;
+  flex: 0 0 auto;
 }
 
 .rules-modal {
