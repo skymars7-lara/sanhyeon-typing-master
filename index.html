@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>산현중 TYPING MASTER</title>
+  <link rel="stylesheet" href="2026-06-25-type-io-web.css">
+</head>
+<body>
+  <canvas id="particleCanvas" aria-hidden="true"></canvas>
+
+  <main>
+    <section class="screen is-visible" id="entryScreen">
+      <div class="entry-shell">
+        <div class="entry-brand">
+          <div class="brand-title">산현중 TYPING MASTER</div>
+          <p>산현중 융합교육 환경구성</p>
+        </div>
+
+        <div class="entry-grid">
+          <article class="entry-panel">
+            <h1>학생 입장</h1>
+            <label class="field">
+              <span>인증번호</span>
+              <input id="studentCodeInput" inputmode="numeric" maxlength="8" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>이름</span>
+              <input id="studentNameInput" placeholder="이름을 입력하세요" autocomplete="off">
+            </label>
+            <button id="studentEnterBtn" class="primary-btn">배틀 입장</button>
+          </article>
+
+          <article class="entry-panel">
+            <h1>교사 입장</h1>
+            <label class="field">
+              <span>관리자 인증번호</span>
+              <input id="teacherPinInput" type="password" placeholder="관리자 인증번호" autocomplete="off">
+            </label>
+            <button id="teacherEnterBtn" class="secondary-btn">입장</button>
+            <p id="teacherAuthMessage" class="message"></p>
+          </article>
+        </div>
+        <p class="program-contact">프로그램의 문의는 정보부로 연락주세요.</p>
+      </div>
+    </section>
+
+    <section class="screen" id="teacherScreen">
+      <header class="teacher-topbar">
+        <div>
+          <p class="eyebrow">교사용 지문 관리</p>
+          <h1>과목을 선택하고 텍스트 파일을 업로드하세요</h1>
+        </div>
+        <button id="teacherBattleBtn" class="room-action" type="button">
+          <span>학생 배틀 화면</span>
+          <strong>이동</strong>
+        </button>
+      </header>
+
+      <div class="teacher-workspace">
+        <aside class="teacher-side">
+          <label class="field">
+            <span>과목</span>
+            <select id="subjectSelect">
+              <option value="국어">국어</option>
+              <option value="수학">수학</option>
+              <option value="영어">영어</option>
+              <option value="사회">사회</option>
+              <option value="과학">과학</option>
+              <option value="역사">역사</option>
+              <option value="정보">정보</option>
+              <option value="미술">미술</option>
+              <option value="도덕">도덕</option>
+              <option value="진로">진로</option>
+              <option value="음악">음악</option>
+              <option value="기타">기타</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>지문 제목</span>
+            <input id="passageTitleInput" value="이상 시집 1" autocomplete="off">
+          </label>
+          <label class="file-drop">
+            <input id="textFileInput" type="file" accept=".txt,.pdf,text/plain,application/pdf">
+            <strong>텍스트 파일 업로드</strong>
+            <span>TXT 또는 PDF 파일을 업로드하세요.<br>업로드한 지문은 Supabase에 저장할 수 있습니다.</span>
+          </label>
+          <div class="button-column">
+            <button id="savePassageBtn" class="primary-btn">현재 과목에 저장</button>
+            <button id="loadPassageBtn" class="secondary-btn">저장된 지문 불러오기</button>
+            <button id="saveSupabaseConfigBtn" class="ghost-btn">Supabase 설정 저장</button>
+            <button id="newRoomBtn" class="ghost-btn">학생 입장 인증번호 만들기</button>
+            <button id="goBattleBtn" class="danger-btn">학생 화면 미리보기</button>
+          </div>
+          <div id="studentCodePanel" class="code-maker" hidden>
+            <label class="field">
+              <span>학생 입장코드 직접 입력</span>
+              <input id="customRoomCodeInput" value="202603" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off">
+            </label>
+            <button id="applyRoomCodeBtn" class="primary-btn">입장코드 적용</button>
+            <p id="roomCodeMessage" class="message">숫자 4자리 이상으로 입력하세요.</p>
+          </div>
+        </aside>
+
+        <section class="passage-editor">
+          <div class="editor-head">
+            <div>
+              <p class="eyebrow">업로드 지문</p>
+              <h2 id="teacherPassageLabel">국어 / 이상 시집 1</h2>
+            </div>
+            <div class="editor-actions">
+              <button id="editPassageBtn" class="small-btn">수정</button>
+              <button id="publishPassageBtn" class="small-btn publish-btn">배포</button>
+              <span id="driveState" class="status-pill">Supabase 미설정</span>
+            </div>
+          </div>
+          <textarea id="passageTextInput" rows="18"></textarea>
+          <div class="drive-note">
+            <strong>Supabase 지문 저장 설정</strong>
+            <div class="supabase-grid">
+              <label class="field">
+                <span>Supabase URL</span>
+                <input id="supabaseUrlInput" placeholder="https://프로젝트ID.supabase.co" autocomplete="off">
+              </label>
+              <label class="field">
+                <span>anon public key</span>
+                <input id="supabaseKeyInput" placeholder="Supabase anon key" autocomplete="off">
+              </label>
+              <label class="field">
+                <span>테이블 이름</span>
+                <input id="supabaseTableInput" value="type_io_passages" autocomplete="off">
+              </label>
+            </div>
+            <div class="supabase-actions">
+              <button id="saveSupabaseConfigInlineBtn" class="primary-btn" type="button">Supabase 설정 저장</button>
+              <button id="testSupabaseBtn" class="secondary-btn" type="button">저장 확인</button>
+            </div>
+            <ol>
+              <li>Supabase에서 새 프로젝트를 만들고 SQL Editor를 엽니다.</li>
+              <li>아래 안내의 SQL을 실행해 지문 테이블을 만듭니다.</li>
+              <li>Project Settings - API에서 Project URL과 anon public key를 복사해 위 칸에 붙여넣습니다.</li>
+              <li>Supabase 설정 저장을 누른 뒤 현재 과목에 저장을 누르면 지문이 Supabase에 저장됩니다.</li>
+              <li>연결 정보가 비어 있으면 이 브라우저에만 임시 저장됩니다.</li>
+            </ol>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="screen" id="battleScreen">
+      <div class="battle-page">
+        <aside class="left-panel">
+          <div class="student-profile">
+            <p id="subjectLabel">국어</p>
+            <h1 id="battleTitle">이상 시집 1</h1>
+            <span class="source-chip" id="sourceChip">이상 / 공유마당 / CC B</span>
+            <div class="avatar" id="playerName">학생</div>
+          </div>
+
+          <div class="player-metrics">
+            <div>
+              <span>진행률</span>
+              <strong id="progressText">0%</strong>
+            </div>
+            <div>
+              <span>분당 타자수</span>
+              <strong id="speedText">0타</strong>
+            </div>
+            <div>
+              <span>정확도</span>
+              <strong id="accuracyText">100%</strong>
+            </div>
+            <div class="progress-track"><div id="progressFill"></div></div>
+          </div>
+
+          <button id="langToggleBtn" class="small-btn">한타</button>
+        </aside>
+
+        <section class="typing-stage">
+          <div class="live-board">
+            <div>
+              <span>현재 순위</span>
+              <strong id="rankText">-</strong>
+            </div>
+            <div>
+              <span>1등과의 차이</span>
+              <strong id="leaderGapText">-</strong>
+            </div>
+            <div>
+              <div class="ticker-window"><strong id="tickerText">입장 후 입력을 시작하세요</strong></div>
+            </div>
+            <div class="teacher-battle-actions teacher-only" hidden>
+              <button id="battleStartBtn" class="battle-start-btn" type="button">배틀 시작</button>
+              <button id="teacherSettingsBtn" class="battle-settings-btn" type="button">교사 설정</button>
+            </div>
+          </div>
+          <button class="page-arrow left" id="prevLineBtn" aria-label="이전 줄">‹</button>
+          <div class="battle-main">
+            <div class="battle-grid">
+              <article class="paper-page original-page">
+                <div class="section-label">출제 지문</div>
+                <div id="passageWindow" class="passage-window">
+                  <p id="previousLine" class="target-line"></p>
+                  <p id="targetLine" class="faint-line"></p>
+                  <p id="nextLine" class="faint-line"></p>
+                </div>
+                <span id="totalCharsLabel">0 자</span>
+              </article>
+              <article class="paper-page input-page">
+                <div class="section-label">입력창</div>
+                <textarea id="typingInput" spellcheck="false" autocomplete="off" placeholder="이곳에 지문을 입력하세요"></textarea>
+                <span id="typedCharsLabel">0 자</span>
+              </article>
+            </div>
+            <section class="rank-box">
+              <div class="rank-head">
+                <h2>실시간 순위</h2>
+              </div>
+              <ul id="scoreList"></ul>
+            </section>
+          </div>
+          <button class="page-arrow right" id="nextLineBtn" aria-label="다음 줄">›</button>
+        </section>
+      </div>
+
+      <div id="koOverlay" class="ko-overlay">
+        <strong id="resultTitle">경기 종료</strong>
+        <span id="resultSummary">모든 학생의 최종 순위가 집계되었습니다.</span>
+        <ol id="finalRankList" class="final-rank-list"></ol>
+      </div>
+      <div id="countdownOverlay" class="countdown-overlay" hidden>
+        <div id="countdownCircle" class="countdown-circle">3</div>
+      </div>
+    </section>
+  </main>
+
+  <script src="2026-06-25-type-io-web.js"></script>
+</body>
+</html>
