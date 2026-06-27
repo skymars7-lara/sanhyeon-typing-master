@@ -167,6 +167,8 @@ const teacherStudentList = document.getElementById("teacherStudentList");
 const teacherRankBoard = document.getElementById("teacherRankBoard");
 const teacherRankList = document.getElementById("teacherRankList");
 const teacherRankCount = document.getElementById("teacherRankCount");
+const teacherLogoutBtn = document.getElementById("teacherLogoutBtn");
+const battleLogoutBtn = document.getElementById("battleLogoutBtn");
 const canvas = document.getElementById("particleCanvas");
 const ctx = canvas.getContext("2d");
 let particles = [];
@@ -383,7 +385,6 @@ async function loadActiveRoom(inputCode) {
     };
     roomCode = room.room_code || inputCode;
     currentRoomCode = roomCode;
-    currentTeacherCode = room.teacher_code || "";
     return true;
   } catch {
     return false;
@@ -626,10 +627,10 @@ function startTeacherPolling() {
 }
 
 async function registerCurrentPlayer(name) {
-  if (!hasSupabaseConfig()) return;
+  if (!hasSupabaseConfig()) throw new Error("SUPABASE_NOT_CONFIGURED");
   await requestSupabase(`${PLAYERS_TABLE}?room_code=eq.${encodeURIComponent(currentRoomCode)}&student_name=eq.${encodeURIComponent(name)}`, {
     method: "DELETE"
-  }).catch(() => {});
+  });
   const rows = await requestSupabase(PLAYERS_TABLE, {
     method: "POST",
     headers: {
@@ -647,6 +648,11 @@ async function registerCurrentPlayer(name) {
     })
   });
   currentPlayerId = rows?.[0]?.id || "";
+  if (!currentPlayerId) {
+    const created = await requestSupabase(`${PLAYERS_TABLE}?room_code=eq.${encodeURIComponent(currentRoomCode)}&student_name=eq.${encodeURIComponent(name)}&select=id&order=updated_at.desc&limit=1`);
+    currentPlayerId = created?.[0]?.id || "";
+  }
+  if (!currentPlayerId) throw new Error("PLAYER_REGISTRATION_FAILED");
 }
 
 async function enterStudentBattle(inputCode, name, options = {}) {
@@ -663,7 +669,13 @@ async function enterStudentBattle(inputCode, name, options = {}) {
   studentAuthMessage.textContent = options.silent ? "" : "배포된 지문을 불러오는 중입니다...";
   await loadActiveRoom(inputCode);
   studentAuthMessage.textContent = options.silent ? "" : "학생 정보를 등록하는 중입니다...";
-  await registerCurrentPlayer(name).catch(() => {});
+  try {
+    await registerCurrentPlayer(name);
+  } catch {
+    studentAuthMessage.textContent = "접속자 등록에 실패했습니다. Supabase SQL 적용 상태를 확인해주세요.";
+    studentCodeInput.focus();
+    return false;
+  }
   saveSession("student", { roomCode: inputCode, name });
   studentAuthMessage.textContent = "";
   isTeacherBattle = false;
@@ -689,6 +701,22 @@ async function updateCurrentPlayer(player) {
       updated_at: new Date().toISOString()
     })
   });
+}
+
+async function keepCurrentPlayerOnline() {
+  if (!hasSupabaseConfig() || !currentPlayerId || isTeacherBattle) return;
+  await requestSupabase(`${PLAYERS_TABLE}?id=eq.${encodeURIComponent(currentPlayerId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ updated_at: new Date().toISOString() })
+  });
+}
+
+async function deleteCurrentPlayer() {
+  if (!hasSupabaseConfig() || !currentPlayerId) return;
+  await requestSupabase(`${PLAYERS_TABLE}?id=eq.${encodeURIComponent(currentPlayerId)}`, {
+    method: "DELETE"
+  });
+  currentPlayerId = "";
 }
 
 function deleteCurrentPlayerOnExit() {
@@ -727,6 +755,7 @@ function releaseTeacherOnExit() {
 async function pollRoomForStart() {
   if (!hasSupabaseConfig() || isTeacherBattle) return;
   try {
+    await keepCurrentPlayerOnline();
     await fetchPlayers();
     const rows = await requestSupabase(`${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(currentRoomCode)}&select=status,active_subject,active_title,active_passage&limit=1`);
     const room = rows?.[0];
@@ -1313,6 +1342,38 @@ function retryBattle() {
   setTickerMessages(["재도전 준비 완료. 교사의 시작 신호를 기다리세요."]);
 }
 
+async function logout() {
+  const sessionRole = getSession().role;
+  clearInterval(roomPollId);
+  clearInterval(teacherPollId);
+  clearInterval(timerId);
+  stopTensionMusic();
+  typingInput.disabled = true;
+
+  if (sessionRole === "teacher") {
+    await releaseTeacherRoom().catch(() => {});
+  } else {
+    await deleteCurrentPlayer().catch(() => {});
+  }
+
+  sessionStorage.removeItem(SESSION_KEY);
+  sessionStorage.removeItem("type_io_teacher_client_id");
+  currentPlayerId = "";
+  currentTeacherCode = "";
+  teacherClientId = "";
+  currentRoomCode = "";
+  roomCode = "";
+  remotePlayers = [];
+  isTeacherBattle = false;
+  studentCodeInput.value = "";
+  studentNameInput.value = "";
+  teacherPinInput.value = "";
+  studentAuthMessage.textContent = "";
+  teacherAuthMessage.textContent = "";
+  rulesModal.hidden = true;
+  showScreen(entryScreen);
+}
+
 async function restoreSession() {
   const session = getSession();
   if (session.role === "student" && session.roomCode && session.name) {
@@ -1484,6 +1545,9 @@ teacherSettingsBtn.addEventListener("click", () => {
   stopTensionMusic();
   showScreen(teacherScreen);
 });
+
+teacherLogoutBtn.addEventListener("click", logout);
+battleLogoutBtn.addEventListener("click", logout);
 
 subjectSelect.addEventListener("change", async () => {
   const passages = await loadPassageTitlesForSubject();

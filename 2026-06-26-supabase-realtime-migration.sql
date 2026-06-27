@@ -80,6 +80,7 @@ drop policy if exists "type_io_passages_update" on public.type_io_passages;
 drop policy if exists "rooms_select" on public.type_io_rooms;
 drop policy if exists "rooms_insert" on public.type_io_rooms;
 drop policy if exists "rooms_update" on public.type_io_rooms;
+drop policy if exists "rooms_delete" on public.type_io_rooms;
 drop policy if exists "players_select" on public.type_io_players;
 drop policy if exists "players_insert" on public.type_io_players;
 drop policy if exists "players_update" on public.type_io_players;
@@ -105,6 +106,9 @@ on public.type_io_rooms for insert to anon with check (true);
 
 create policy "rooms_update"
 on public.type_io_rooms for update to anon using (true) with check (true);
+
+create policy "rooms_delete"
+on public.type_io_rooms for delete to anon using (true);
 
 create policy "players_select"
 on public.type_io_players for select to anon using (true);

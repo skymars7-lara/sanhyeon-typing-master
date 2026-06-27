@@ -532,6 +532,33 @@ p {
   text-align: center;
 }
 
+.logout-btn {
+  min-height: 2.35rem;
+  border: 1px solid rgba(255, 87, 150, 0.58);
+  border-radius: 6px;
+  padding: 0.55rem 0.9rem;
+  color: #fff;
+  background: rgba(255, 46, 126, 0.15);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.logout-btn:hover,
+.logout-btn:focus-visible {
+  border-color: var(--pink);
+  background: rgba(255, 46, 126, 0.28);
+  outline: none;
+}
+
+.student-profile .logout-btn {
+  width: min(10.5rem, 92%);
+  margin: 0 auto;
+}
+
+.teacher-side > .logout-btn {
+  width: 100%;
+}
+
 .student-profile p {
   margin-bottom: 0.8rem;
   color: var(--cyan);
