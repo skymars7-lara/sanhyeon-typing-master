@@ -54,13 +54,17 @@ let mistakeCount = 0;
 let score = 0;
 let timerId = 0;
 let isTeacherBattle = false;
+let isPracticeMode = false;
 let previousRankMap = new Map();
 let tickerMessages = [];
 let tickerIndex = 0;
 let tickerSignature = "";
 let lastTickerUpdateAt = 0;
+let pendingTickerMessages = null;
+let tickerRunning = false;
 let lastLeaderName = "";
 let announcedRanks = new Set();
+let announcedFinishers = new Set();
 let eliminatedPlayers = new Set();
 let lastAccuracyStatus = "safe";
 let currentPlayerId = "";
@@ -70,12 +74,16 @@ let teacherClientId = "";
 let remotePlayers = [];
 let teacherPollId = 0;
 let roomPollId = 0;
+let battleClockId = 0;
 let lastRoomStatus = "waiting";
 let lastPlayerSyncAt = 0;
 let audioContext;
 let musicTimer = 0;
 let masterGain;
 let editingOriginalTitle = "";
+let battleEndsAt = 0;
+let battleIsOver = false;
+let lastPlayerResult = { progress: 0, accuracy: 100, speed: 0, doneChars: 0 };
 
 function getRoomStorageCode() {
   return roomCode || (currentTeacherCode ? `teacher-${currentTeacherCode}` : "teacher-waiting");
@@ -165,6 +173,7 @@ const koOverlay = document.getElementById("koOverlay");
 const resultTitle = document.getElementById("resultTitle");
 const resultSummary = document.getElementById("resultSummary");
 const finalRankList = document.getElementById("finalRankList");
+const closeResultBtn = document.getElementById("closeResultBtn");
 const connectedCount = document.getElementById("connectedCount");
 const teacherStudentList = document.getElementById("teacherStudentList");
 const teacherRankBoard = document.getElementById("teacherRankBoard");
@@ -172,6 +181,12 @@ const teacherRankList = document.getElementById("teacherRankList");
 const teacherRankCount = document.getElementById("teacherRankCount");
 const teacherLogoutBtn = document.getElementById("teacherLogoutBtn");
 const battleLogoutBtn = document.getElementById("battleLogoutBtn");
+const teacherFinalRankBtn = document.getElementById("teacherFinalRankBtn");
+const finalRankBtn = document.getElementById("finalRankBtn");
+const battleTimerText = document.getElementById("battleTimerText");
+const practiceControls = document.getElementById("practiceControls");
+const practiceSubjectSelect = document.getElementById("practiceSubjectSelect");
+const practicePassageSelect = document.getElementById("practicePassageSelect");
 const canvas = document.getElementById("particleCanvas");
 const ctx = canvas.getContext("2d");
 let particles = [];
@@ -517,6 +532,7 @@ async function saveRoomCodeToSupabase() {
 
 async function setRoomStatus(status) {
   if (!hasSupabaseConfig()) return false;
+  const statusTime = new Date().toISOString();
   const roomFilter = currentTeacherCode
     ? `teacher_code=eq.${encodeURIComponent(currentTeacherCode)}`
     : `room_code=eq.${encodeURIComponent(roomCode)}`;
@@ -527,12 +543,13 @@ async function setRoomStatus(status) {
     },
     body: JSON.stringify({
       status,
-      started_at: status === "countdown" || status === "playing" ? new Date().toISOString() : null,
+      started_at: status === "countdown" || status === "playing" ? statusTime : undefined,
       teacher_active_at: currentTeacherCode ? new Date().toISOString() : undefined,
       updated_at: new Date().toISOString()
     })
   });
   lastRoomStatus = status;
+  if (status === "playing") startBattleTimer(Date.parse(statusTime));
   return true;
 }
 
@@ -561,9 +578,10 @@ async function removePreviousRoom(previousCode, nextCode) {
 
 async function pauseBattle() {
   if (!isTeacherBattle) return;
-  await setRoomStatus("paused").catch(() => {});
+  await setRoomStatus("finished").catch(() => {});
+  await fetchPlayers().catch(() => {});
   stopTensionMusic();
-  setTickerMessages(["게임이 잠시 멈췄습니다. 교사의 안내를 기다리세요."]);
+  finishBattleForEveryone("교사가 경기를 종료했습니다.");
 }
 
 async function restartBattle() {
@@ -573,6 +591,9 @@ async function restartBattle() {
   remotePlayers = [];
   previousRankMap = new Map();
   announcedRanks = new Set();
+  announcedFinishers = new Set();
+  battleIsOver = false;
+  battleEndsAt = 0;
   prepareBattle();
   await refreshTeacherLive();
   setTickerMessages(["새 경기를 준비합니다. 배틀 시작 버튼을 눌러주세요."]);
@@ -590,7 +611,7 @@ function sortPlayers(players) {
 
 async function fetchPlayers() {
   if (!hasSupabaseConfig()) return [];
-  const rows = await requestSupabase(`${PLAYERS_TABLE}?room_code=eq.${encodeURIComponent(currentRoomCode)}&select=id,student_name,progress,speed,accuracy,typed_chars,status,updated_at&order=updated_at.desc&limit=60`);
+  const rows = await requestSupabase(`${PLAYERS_TABLE}?room_code=eq.${encodeURIComponent(currentRoomCode)}&select=id,student_name,progress,speed,accuracy,typed_chars,status,finished_at,updated_at&order=updated_at.desc&limit=60`);
   remotePlayers = uniqueActivePlayers(rows || []);
   return remotePlayers;
 }
@@ -658,6 +679,14 @@ async function refreshTeacherLive() {
     const players = await fetchPlayers();
     renderTeacherStudents(players);
     renderTeacherRankings(players);
+    if (
+      lastRoomStatus === "playing"
+      && players.length
+      && players.every((player) => player.status === "finished" || player.status === "eliminated")
+    ) {
+      await setRoomStatus("finished").catch(() => {});
+      finishBattleForEveryone("모든 학생의 대결이 완료되었습니다.");
+    }
   } catch {
     connectedCount.textContent = "확인 실패";
   }
@@ -699,6 +728,8 @@ async function registerCurrentPlayer(name) {
 }
 
 async function enterStudentBattle(inputCode, name, options = {}) {
+  if (inputCode === "0000") return enterPracticeBattle(name);
+  isPracticeMode = false;
   currentRoomCode = inputCode;
   studentAuthMessage.textContent = options.silent ? "" : "입장코드를 확인하는 중입니다...";
   const codeOk = await verifyRoomCode(inputCode);
@@ -725,6 +756,99 @@ async function enterStudentBattle(inputCode, name, options = {}) {
   playerName.textContent = name;
   prepareBattle();
   startRoomPolling();
+  showScreen(battleScreen);
+  showRulesIfNeeded();
+  return true;
+}
+
+async function loadPracticePassages(subject) {
+  let passages = [];
+  if (hasSupabaseConfig()) {
+    const config = getSupabaseConfig();
+    try {
+      const rows = await requestSupabase(
+        `${config.table}?subject=eq.${encodeURIComponent(subject)}&select=subject,title,source,body,updated_at&order=updated_at.desc`
+      );
+      passages = (rows || []).map((row) => ({
+        subject: row.subject,
+        title: row.title,
+        source: row.source || `${row.subject} / 교사 저장 지문`,
+        text: row.body
+      }));
+      passages.forEach(cacheCurrentPassage);
+    } catch {
+      passages = getCachedPassagesForSubject(subject);
+    }
+  } else {
+    passages = getCachedPassagesForSubject(subject);
+  }
+  practicePassageSelect.innerHTML = passages.length
+    ? passages.map((passage, index) => `<option value="${index}">${escapeHtml(passage.title)}</option>`).join("")
+    : `<option value="">저장된 지문 없음</option>`;
+  practicePassageSelect.disabled = !passages.length;
+  practicePassageSelect._passages = passages;
+  return passages;
+}
+
+function startSelectedPractice() {
+  const passages = practicePassageSelect._passages || [];
+  const selected = passages[Number(practicePassageSelect.value || 0)];
+  if (!selected) return;
+  currentPassage = { ...selected };
+  battleIsOver = false;
+  lastPlayerResult = { progress: 0, accuracy: 100, speed: 0, doneChars: 0, status: "practicing" };
+  koOverlay.classList.remove("is-visible");
+  prepareBattle();
+  setTickerMessages([`${currentPassage.title} 개인 연습을 시작합니다.`]);
+  setTimeout(() => typingInput.focus(), 80);
+}
+
+async function enterPracticeBattle(name) {
+  isTeacherBattle = false;
+  isPracticeMode = true;
+  currentPlayerId = "";
+  currentRoomCode = "";
+  saveSession("practice", { roomCode: "0000", name });
+  playerName.textContent = name;
+  practiceSubjectSelect.innerHTML = Array.from(subjectSelect.options)
+    .map((option) => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.textContent)}</option>`)
+    .join("");
+  const preferredSubject = currentPassage.subject || practiceSubjectSelect.value;
+  practiceSubjectSelect.value = Array.from(practiceSubjectSelect.options).some((option) => option.value === preferredSubject)
+    ? preferredSubject
+    : practiceSubjectSelect.options[0]?.value || "";
+  let passages = await loadPracticePassages(practiceSubjectSelect.value);
+  if (!passages.length) {
+    for (const option of Array.from(practiceSubjectSelect.options)) {
+      passages = await loadPracticePassages(option.value);
+      if (passages.length) {
+        practiceSubjectSelect.value = option.value;
+        break;
+      }
+    }
+  }
+  if (passages.length) {
+    currentPassage = { ...passages[0] };
+    prepareBattle();
+  } else {
+    currentPassage = {
+      subject: practiceSubjectSelect.value || "연습",
+      title: "저장된 지문 없음",
+      source: "교사가 저장한 지문이 없습니다",
+      text: ""
+    };
+    battleScreen.classList.add("is-practice");
+    practiceControls.hidden = false;
+    finalRankBtn.hidden = true;
+    subjectLabel.textContent = currentPassage.subject;
+    battleTitle.textContent = currentPassage.title;
+    sourceChip.textContent = currentPassage.source;
+    previousLine.textContent = "";
+    targetLine.textContent = "";
+    nextLine.textContent = "";
+    typingInput.value = "";
+    typingInput.disabled = true;
+  }
   showScreen(battleScreen);
   showRulesIfNeeded();
   return true;
@@ -800,7 +924,7 @@ async function pollRoomForStart() {
   try {
     await keepCurrentPlayerOnline();
     await fetchPlayers();
-    const rows = await requestSupabase(`${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(currentRoomCode)}&select=status,active_subject,active_title,active_passage&limit=1`);
+    const rows = await requestSupabase(`${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(currentRoomCode)}&select=status,started_at,active_subject,active_title,active_passage&limit=1`);
     const room = rows?.[0];
     if (!room) return;
     if (room.active_passage && (
@@ -819,11 +943,20 @@ async function pollRoomForStart() {
     if (room.status === "countdown" && lastRoomStatus !== "countdown") {
       lastRoomStatus = "countdown";
       runCountdownThenStart();
-    } else if (room.status === "paused") {
-      lastRoomStatus = "paused";
-      typingInput.disabled = true;
-      stopTensionMusic();
-      setTickerMessages(["게임이 멈췄습니다. 교사의 안내를 기다리세요."]);
+    } else if (room.status === "playing") {
+      lastRoomStatus = "playing";
+      if (room.started_at && !battleEndsAt) startBattleTimer(Date.parse(room.started_at));
+      const activePlayers = uniqueActivePlayers(remotePlayers);
+      if (
+        activePlayers.length
+        && activePlayers.every((player) => player.status === "finished" || player.status === "eliminated")
+      ) {
+        await setRoomStatus("finished").catch(() => {});
+        finishBattleForEveryone("모든 학생의 대결이 완료되었습니다.");
+      }
+    } else if (room.status === "finished") {
+      lastRoomStatus = "finished";
+      finishBattleForEveryone("대결이 종료되었습니다.");
     } else if (room.status === "waiting" && lastRoomStatus !== "waiting") {
       lastRoomStatus = "waiting";
       prepareBattle();
@@ -1046,6 +1179,9 @@ async function loadSavedPassage() {
 }
 
 function prepareBattle() {
+  clearInterval(battleClockId);
+  battleEndsAt = 0;
+  battleTimerText.textContent = "--:--";
   lines = splitPassage(currentPassage.text);
   if (!lines.length) lines = splitPassage(samples.ko.text);
   currentLineIndex = 0;
@@ -1060,6 +1196,9 @@ function prepareBattle() {
   teacherBattleActions.hidden = !isTeacherBattle;
   teacherRankBoard.hidden = !isTeacherBattle;
   battleScreen.classList.toggle("is-teacher-battle", isTeacherBattle);
+  battleScreen.classList.toggle("is-practice", isPracticeMode);
+  practiceControls.hidden = !isPracticeMode;
+  finalRankBtn.hidden = isPracticeMode;
   subjectLabel.textContent = currentPassage.subject;
   battleTitle.textContent = currentPassage.title;
   sourceChip.textContent = currentPassage.source;
@@ -1148,6 +1287,35 @@ function formatTime(ms) {
   return `${h} : ${m} : ${s}`;
 }
 
+function getBattleDurationMs() {
+  const totalChars = Math.max(1, lines.join("").length);
+  return Math.max(10000, Math.ceil((totalChars / 150) * 60 * 1000));
+}
+
+function updateBattleTimer() {
+  if (!battleEndsAt) {
+    battleTimerText.textContent = "--:--";
+    return;
+  }
+  const remaining = Math.max(0, battleEndsAt - Date.now());
+  const totalSeconds = Math.ceil(remaining / 1000);
+  const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+  const seconds = String(totalSeconds % 60).padStart(2, "0");
+  battleTimerText.textContent = `${minutes}:${seconds}`;
+  if (remaining <= 0 && !battleIsOver) {
+    setRoomStatus("finished").catch(() => {});
+    finishBattleForEveryone("제한시간이 종료되었습니다.");
+  }
+}
+
+function startBattleTimer(startTime = Date.now()) {
+  battleIsOver = false;
+  battleEndsAt = startTime + getBattleDurationMs();
+  clearInterval(battleClockId);
+  updateBattleTimer();
+  battleClockId = setInterval(updateBattleTimer, 500);
+}
+
 function updateStats() {
   const typed = typingInput.value;
   const accuracy = calculateAccuracy();
@@ -1197,6 +1365,7 @@ function updateStats() {
         : "waiting";
 
   const playerSnapshot = { progress, accuracy, speed, doneChars, status: playerStatus };
+  lastPlayerResult = playerSnapshot;
   renderScores(playerSnapshot);
   if (!isTeacherBattle && currentPlayerId && Date.now() - lastPlayerSyncAt > 1200) {
     lastPlayerSyncAt = Date.now();
@@ -1208,22 +1377,30 @@ function setTickerMessages(messages) {
   const baseMessages = messages.filter(Boolean);
   const nextSignature = baseMessages.join("||");
   if (nextSignature === tickerSignature && tickerMessages.length) return;
-  const forceUpdate = /시작|멈췄|탈락|회복|재도전|새 경기|기다리는 중/.test(nextSignature);
-  if (!forceUpdate && Date.now() - lastTickerUpdateAt < 8500 && tickerMessages.length) return;
+  if (tickerRunning && tickerMessages.length) {
+    pendingTickerMessages = baseMessages;
+    return;
+  }
   lastTickerUpdateAt = Date.now();
   tickerSignature = nextSignature;
   tickerMessages = withCheerArts(baseMessages);
   if (!tickerMessages.length) return;
   tickerIndex = 0;
   applyTickerMessage(tickerMessages[tickerIndex]);
-  restartTickerAnimation();
 }
 
 function rotateTicker() {
+  tickerRunning = false;
+  if (pendingTickerMessages) {
+    const nextMessages = pendingTickerMessages;
+    pendingTickerMessages = null;
+    tickerSignature = "";
+    setTickerMessages(nextMessages);
+    return;
+  }
   if (!tickerMessages.length) return;
   tickerIndex = (tickerIndex + 1) % tickerMessages.length;
   applyTickerMessage(tickerMessages[tickerIndex]);
-  restartTickerAnimation();
 }
 
 function withCheerArts(messages) {
@@ -1244,12 +1421,14 @@ function applyTickerMessage(message) {
     tickerText.style.setProperty("--ticker-start", `${windowWidth + 24}px`);
     tickerText.style.setProperty("--ticker-end", `-${textWidth + 24}px`);
     tickerText.style.setProperty("--ticker-duration", `${duration}s`);
+    restartTickerAnimation();
   });
 }
 
 function restartTickerAnimation() {
   tickerText.style.animation = "none";
   void tickerText.offsetWidth;
+  tickerRunning = true;
   tickerText.style.animation = "";
 }
 
@@ -1292,6 +1471,8 @@ function stopTensionMusic() {
 }
 
 function runCountdownThenStart() {
+  battleIsOver = false;
+  koOverlay.classList.remove("is-visible");
   const steps = [
     { label: "3", color: "#00e8ff" },
     { label: "2", color: "#ffd166" },
@@ -1327,6 +1508,11 @@ function runCountdownThenStart() {
 }
 
 function renderScores(player = { progress: 0, accuracy: 100, speed: 0, doneChars: 0 }) {
+  if (isPracticeMode) {
+    rankText.textContent = "연습";
+    leaderGapText.textContent = "개인 연습";
+    return;
+  }
   const playerNameValue = playerName.textContent.trim() || "나";
   const remoteCompetitors = uniqueActivePlayers(remotePlayers)
     .filter((student) => student.id !== currentPlayerId)
@@ -1383,11 +1569,22 @@ function renderScores(player = { progress: 0, accuracy: 100, speed: 0, doneChars
     if (trend === "rank-down") return `${student.name} 학생 순위 하락, 재추격이 필요합니다.`;
     return "";
   }).filter(Boolean);
+  const finishAnnouncements = uniqueActivePlayers(remotePlayers)
+    .filter((student) => student.status === "finished" && student.finished_at)
+    .sort((a, b) => Date.parse(a.finished_at) - Date.parse(b.finished_at))
+    .map((student, index) => {
+      const key = `${student.id}:${student.finished_at}`;
+      if (announcedFinishers.has(key)) return "";
+      announcedFinishers.add(key);
+      return `${index + 1}등 ${student.student_name} 학생 완주!`;
+    })
+    .filter(Boolean);
   lastLeaderName = leader.name;
 
   rankText.textContent = playerEliminated ? "탈락" : myIndex >= 0 ? `${myIndex + 1}등` : "제외";
   leaderGapText.textContent = `1등 ${leader.speed}타\n내 타수 ${me.speed}타`;
   setTickerMessages([
+    ...finishAnnouncements,
     ...rankAnnouncements,
     playerEliminated
       ? `${playerNameValue} 학생은 정확도 90% 이하로 탈락했습니다.`
@@ -1429,60 +1626,108 @@ function getRankArrow(name, index) {
   return "―";
 }
 
-function buildFinalRanking(player = { progress: 100, accuracy: 100, speed: 0 }) {
+function buildFinalRanking(player = lastPlayerResult) {
   const playerNameValue = playerName.textContent.trim() || "나";
-  return [
-    { name: playerNameValue, speed: player.speed, accuracy: player.accuracy, progress: 100, isMe: true },
+  const entries = [
     ...uniqueActivePlayers(remotePlayers)
-      .filter((student) => student.id !== currentPlayerId)
       .map((student) => ({
+      id: student.id,
       name: student.student_name,
       progress: Number(student.progress || 0),
       speed: Number(student.speed || 0),
       accuracy: Number(student.accuracy || 100),
       status: student.status,
-      isMe: false
+      finishedAt: student.finished_at ? Date.parse(student.finished_at) : 0,
+      isMe: student.id === currentPlayerId
     }))
-  ]
-    .filter((student) => student.accuracy > 95 && student.status !== "eliminated")
-    .map((student) => ({
-      ...student,
-      points: student.speed * 3 + student.accuracy * 8
-    }))
-    .sort((a, b) => b.points - a.points);
+  ];
+  if (!isTeacherBattle && !entries.some((student) => student.isMe)) {
+    entries.push({
+      id: currentPlayerId,
+      name: playerNameValue,
+      progress: Number(player.progress || 0),
+      speed: Number(player.speed || 0),
+      accuracy: Number(player.accuracy || 100),
+      status: Number(player.progress || 0) >= 100 ? "finished" : "playing",
+      finishedAt: Number(player.progress || 0) >= 100 ? Date.now() : 0,
+      isMe: true
+    });
+  }
+  return entries.sort((a, b) => {
+    const aFinished = a.status === "finished";
+    const bFinished = b.status === "finished";
+    if (aFinished && bFinished) return a.finishedAt - b.finishedAt;
+    if (aFinished !== bFinished) return aFinished ? -1 : 1;
+    if (a.status === "eliminated" !== (b.status === "eliminated")) return a.status === "eliminated" ? 1 : -1;
+    return b.progress - a.progress || b.accuracy - a.accuracy || b.speed - a.speed;
+  });
 }
 
 function showFinalRanking(player) {
-  updateCurrentPlayer({ progress: 100, accuracy: player.accuracy, speed: player.speed, doneChars: lines.join("").length, status: "finished" }).catch(() => {});
-  const ranking = buildFinalRanking(player);
+  if (isPracticeMode) {
+    lastPlayerResult = { ...player, doneChars: lines.join("").length, status: "finished" };
+    resultTitle.textContent = "연습 완료";
+    resultSummary.textContent = "왼쪽에서 다른 과목이나 지문을 선택해 계속 연습할 수 있습니다.";
+    finalRankList.style.setProperty("--final-rank-rows", "1");
+    finalRankList.innerHTML = `
+      <li class="is-me">
+        <b>완료</b>
+        <span>${escapeHtml(currentPassage.title)}</span>
+        <strong>${player.speed}타 / 정확도 ${player.accuracy}%</strong>
+      </li>
+    `;
+    typingInput.disabled = true;
+    stopTensionMusic();
+    koOverlay.classList.add("is-visible");
+    return;
+  }
+  lastPlayerResult = { ...player, doneChars: lines.join("").length, status: "finished" };
+  updateCurrentPlayer(lastPlayerResult).catch(() => {});
+  resultTitle.textContent = "완주 완료";
+  resultSummary.textContent = "대결 중입니다. 모든 학생이 완료하거나 교사가 경기를 종료할 때까지 기다려주세요.";
+  finalRankList.innerHTML = "";
+  typingInput.disabled = true;
+  stopTensionMusic();
+  koOverlay.classList.add("is-visible");
+  setTickerMessages([`${playerName.textContent.trim()} 학생 완주! 최종 순위를 집계하고 있습니다.`]);
+}
+
+function showCurrentFinalRanking(summary = "현재까지 집계된 순위입니다.") {
+  const ranking = buildFinalRanking();
   const myIndex = ranking.findIndex((student) => student.isMe);
-  resultTitle.textContent = `${myIndex + 1}등`;
-  resultSummary.textContent = "나와 접속한 학생 기준 최종 순위입니다.";
-  const visibleRanking = ranking.slice(0, 10);
+  resultTitle.textContent = battleIsOver
+    ? "최종 순위"
+    : myIndex >= 0
+      ? `현재 ${myIndex + 1}등`
+      : "현재 순위";
+  resultSummary.textContent = summary;
+  const visibleRanking = ranking.slice(0, 28);
+  finalRankList.style.setProperty("--final-rank-rows", String(Math.max(1, Math.ceil(visibleRanking.length / 2))));
   finalRankList.innerHTML = visibleRanking.map((student, index) => `
     <li class="${student.isMe ? "is-me" : ""}">
       <b>${index + 1}등</b>
       <span>${student.isMe ? "나" : student.name}</span>
-      <strong>${student.speed}타 / ${student.accuracy}%</strong>
+      <strong>${student.status === "finished" ? "완주" : `${student.progress}%`} / ${student.speed}타 / ${student.accuracy}%</strong>
     </li>
   `).join("");
-  setTickerMessages([
-    `최종 1등 ${ranking[0].name}! ${ranking[0].speed}타, 정확도 ${ranking[0].accuracy}%`,
-    `최종 2등 ${ranking[1]?.name || "-"}, 최종 3등 ${ranking[2]?.name || "-"}`,
-    `나의 최종 순위는 ${myIndex + 1}등입니다.`
-  ]);
-  stopTensionMusic();
   koOverlay.classList.add("is-visible");
-  typingInput.disabled = true;
 }
 
-function retryBattle() {
-  koOverlay.classList.remove("is-visible");
-  eliminatedPlayers.delete(playerName.textContent.trim());
-  lastAccuracyStatus = "safe";
-  prepareBattle();
-  setTimeout(() => typingInput.focus(), 80);
-  setTickerMessages(["재도전 준비 완료. 교사의 시작 신호를 기다리세요."]);
+function finishBattleForEveryone(reason) {
+  if (battleIsOver) return;
+  battleIsOver = true;
+  clearInterval(battleClockId);
+  battleTimerText.textContent = "00:00";
+  typingInput.disabled = true;
+  stopTensionMusic();
+  showCurrentFinalRanking(reason);
+  const ranking = buildFinalRanking();
+  if (ranking.length) {
+    setTickerMessages([
+      `최종 1등 ${ranking[0].name}!`,
+      ...ranking.slice(1, 5).map((student, index) => `최종 ${index + 2}등 ${student.name}`)
+    ]);
+  }
 }
 
 async function logout() {
@@ -1490,6 +1735,7 @@ async function logout() {
   clearInterval(roomPollId);
   clearInterval(teacherPollId);
   clearInterval(timerId);
+  clearInterval(battleClockId);
   stopTensionMusic();
   typingInput.disabled = true;
 
@@ -1508,6 +1754,9 @@ async function logout() {
   roomCode = "";
   remotePlayers = [];
   isTeacherBattle = false;
+  isPracticeMode = false;
+  practiceControls.hidden = true;
+  battleScreen.classList.remove("is-practice");
   studentCodeInput.value = "";
   studentNameInput.value = "";
   teacherPinInput.value = "";
@@ -1519,7 +1768,11 @@ async function logout() {
 
 async function restoreSession() {
   const session = getSession();
-  if (session.role === "student" && session.roomCode && session.name) {
+  if (session.role === "practice" && session.name) {
+    studentCodeInput.value = "0000";
+    studentNameInput.value = session.name;
+    await enterPracticeBattle(session.name);
+  } else if (session.role === "student" && session.roomCode && session.name) {
     studentCodeInput.value = session.roomCode;
     studentNameInput.value = session.name;
     await enterStudentBattle(session.roomCode, session.name, { silent: true });
@@ -1698,6 +1951,39 @@ teacherSettingsBtn.addEventListener("click", () => {
 
 teacherLogoutBtn.addEventListener("click", logout);
 battleLogoutBtn.addEventListener("click", logout);
+finalRankBtn.addEventListener("click", async () => {
+  await fetchPlayers().catch(() => {});
+  showCurrentFinalRanking(battleIsOver ? "최종 순위입니다." : "현재까지 집계된 순위입니다.");
+});
+practiceSubjectSelect.addEventListener("change", async () => {
+  const passages = await loadPracticePassages(practiceSubjectSelect.value);
+  if (passages.length) startSelectedPractice();
+  else {
+    koOverlay.classList.remove("is-visible");
+    typingInput.disabled = true;
+    subjectLabel.textContent = practiceSubjectSelect.value;
+    battleTitle.textContent = "저장된 지문 없음";
+  }
+});
+practicePassageSelect.addEventListener("change", startSelectedPractice);
+teacherFinalRankBtn.addEventListener("click", async () => {
+  isTeacherBattle = true;
+  currentRoomCode = roomCode;
+  playerName.textContent = "교사";
+  teacherBattleActions.hidden = false;
+  teacherRankBoard.hidden = false;
+  battleScreen.classList.add("is-teacher-battle");
+  await fetchPlayers().catch(() => {});
+  showScreen(battleScreen);
+  showCurrentFinalRanking(battleIsOver ? "최종 순위입니다." : "현재까지 집계된 순위입니다.");
+});
+closeResultBtn.addEventListener("click", () => {
+  koOverlay.classList.remove("is-visible");
+  if (!battleIsOver && lastPlayerResult.status !== "finished" && lastPlayerResult.status !== "eliminated") {
+    typingInput.disabled = false;
+    setTimeout(() => typingInput.focus(), 80);
+  }
+});
 
 subjectSelect.addEventListener("change", async () => {
   const passages = await loadPassageTitlesForSubject();
@@ -1714,7 +2000,7 @@ subjectSelect.addEventListener("change", async () => {
 passageTitleInput.addEventListener("input", updateTeacherLabel);
 newPassageBtn.addEventListener("click", startNewPassage);
 closeRulesBtn.addEventListener("click", closeRules);
-retryBattleBtn.addEventListener("click", retryBattle);
+if (retryBattleBtn) retryBattleBtn.hidden = true;
 
 passageTitleSelect.addEventListener("change", () => {
   if (!passageTitleSelect.value) {

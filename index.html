@@ -61,6 +61,7 @@
       <div class="teacher-workspace">
         <aside class="teacher-side">
           <button id="teacherLogoutBtn" class="logout-btn" type="button">로그아웃</button>
+          <button id="teacherFinalRankBtn" class="final-rank-btn" type="button">최종 순위 확인</button>
           <label class="field">
             <span>과목</span>
             <select id="subjectSelect">
@@ -172,6 +173,17 @@
             <span class="source-chip" id="sourceChip">이상 / 공유마당 / CC B</span>
             <div class="avatar" id="playerName">학생</div>
             <button id="battleLogoutBtn" class="logout-btn" type="button">로그아웃</button>
+            <button id="finalRankBtn" class="final-rank-btn" type="button">최종 순위 확인</button>
+            <div id="practiceControls" class="practice-controls" hidden>
+              <label>
+                <span>연습 과목</span>
+                <select id="practiceSubjectSelect"></select>
+              </label>
+              <label>
+                <span>연습 지문</span>
+                <select id="practicePassageSelect"></select>
+              </label>
+            </div>
           </div>
 
           <div class="player-metrics">
@@ -188,6 +200,10 @@
               <strong id="accuracyText">100%</strong>
             </div>
             <div class="progress-track"><div id="progressFill"></div></div>
+            <div class="battle-timer">
+              <span>남은 시간</span>
+              <strong id="battleTimerText">--:--</strong>
+            </div>
           </div>
 
           <button id="langToggleBtn" class="small-btn">한타</button>
@@ -259,7 +275,7 @@
         <strong id="resultTitle">경기 종료</strong>
         <span id="resultSummary">모든 학생의 최종 순위가 집계되었습니다.</span>
         <ol id="finalRankList" class="final-rank-list"></ol>
-        <button id="retryBattleBtn" class="primary-btn retry-btn" type="button">재도전</button>
+        <button id="closeResultBtn" class="secondary-btn" type="button">대결 화면 보기</button>
       </div>
       <div id="countdownOverlay" class="countdown-overlay" hidden>
         <div id="countdownCircle" class="countdown-circle">3</div>

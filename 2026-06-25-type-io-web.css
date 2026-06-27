@@ -592,6 +592,78 @@ p {
   width: 100%;
 }
 
+.final-rank-btn {
+  width: 100%;
+  min-height: 2.35rem;
+  border: 1px solid rgba(255, 209, 102, 0.62);
+  border-radius: 6px;
+  padding: 0.55rem 0.75rem;
+  color: #fff4bf;
+  background: rgba(255, 209, 102, 0.13);
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.student-profile .final-rank-btn {
+  width: min(10.5rem, 92%);
+  margin: 0.45rem auto 0;
+}
+
+.practice-controls {
+  display: grid;
+  gap: 0.55rem;
+  width: min(10.5rem, 92%);
+  margin: 0.8rem auto 0;
+  text-align: left;
+}
+
+.practice-controls[hidden] {
+  display: none;
+}
+
+.practice-controls label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.practice-controls span {
+  color: var(--cyan);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.practice-controls select {
+  width: 100%;
+  min-height: 2.3rem;
+  border: 1px solid rgba(0, 232, 255, 0.4);
+  border-radius: 6px;
+  padding: 0.35rem 0.45rem;
+  color: var(--text);
+  background: rgba(4, 9, 20, 0.95);
+}
+
+#battleScreen.is-practice .live-board,
+#battleScreen.is-practice .rank-box,
+#battleScreen.is-practice .teacher-rank-board,
+#battleScreen.is-practice .battle-timer,
+#battleScreen.is-practice #langToggleBtn,
+#battleScreen.is-practice .rank-runner {
+  display: none;
+}
+
+#battleScreen.is-practice .battle-main {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.battle-timer {
+  border-color: rgba(255, 209, 102, 0.5) !important;
+  background: rgba(255, 209, 102, 0.08) !important;
+}
+
+.battle-timer strong {
+  color: var(--yellow) !important;
+}
+
 .student-profile p {
   margin-bottom: 0.8rem;
   color: var(--cyan);
@@ -1322,8 +1394,11 @@ p {
 
 .final-rank-list {
   display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(var(--final-rank-rows, 1), minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.42rem;
-  width: min(860px, 94vw);
+  width: min(1180px, 96vw);
   max-height: 56vh;
   margin: 0.7rem 0;
   padding: 0;
@@ -1339,7 +1414,7 @@ p {
   border: 1px solid rgba(255, 255, 255, 0.22);
   border-left: 4px solid var(--cyan);
   border-radius: 8px;
-  padding: 0.55rem 0.85rem;
+  padding: 0.38rem 0.65rem;
   background: rgba(0, 0, 0, 0.32);
   text-align: center;
 }
