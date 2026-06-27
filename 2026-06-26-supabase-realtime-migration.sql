@@ -21,6 +21,9 @@ on public.type_io_passages(subject, title);
 
 create table if not exists public.type_io_rooms (
   room_code text primary key,
+  teacher_code text,
+  teacher_client_id text,
+  teacher_active_at timestamptz,
   active_subject text,
   active_title text,
   active_passage text,
@@ -28,6 +31,31 @@ create table if not exists public.type_io_rooms (
   started_at timestamptz,
   updated_at timestamptz default now()
 );
+
+alter table public.type_io_rooms
+add column if not exists teacher_code text;
+
+alter table public.type_io_rooms
+add column if not exists teacher_client_id text;
+
+alter table public.type_io_rooms
+add column if not exists teacher_active_at timestamptz;
+
+delete from public.type_io_rooms a
+using public.type_io_rooms b
+where a.teacher_code is not null
+  and a.teacher_code = b.teacher_code
+  and (
+    coalesce(a.updated_at, '1970-01-01'::timestamptz) < coalesce(b.updated_at, '1970-01-01'::timestamptz)
+    or (
+      coalesce(a.updated_at, '1970-01-01'::timestamptz) = coalesce(b.updated_at, '1970-01-01'::timestamptz)
+      and a.ctid < b.ctid
+    )
+  );
+
+create unique index if not exists type_io_rooms_teacher_code_key
+on public.type_io_rooms(teacher_code)
+where teacher_code is not null;
 
 create table if not exists public.type_io_players (
   id uuid primary key default gen_random_uuid(),

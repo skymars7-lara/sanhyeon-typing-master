@@ -1,4 +1,4 @@
-const TEACHER_PIN = "202603";
+const TEACHER_PINS = ["202603", "202604", "202605", "202606", "202607", "202608", "202609"];
 const STORAGE_KEY = "type_io_passages";
 const SUPABASE_CONFIG_KEY = "type_io_supabase_config";
 const SESSION_KEY = "type_io_session";
@@ -9,6 +9,7 @@ const PASSAGES_TABLE = "type_io_passages";
 const ROOMS_TABLE = "type_io_rooms";
 const PLAYERS_TABLE = "type_io_players";
 const PLAYER_STALE_MS = 3 * 60 * 1000;
+const TEACHER_ACTIVE_MS = 10 * 60 * 1000;
 
 const samples = {
   ko: {
@@ -64,6 +65,8 @@ let eliminatedPlayers = new Set();
 let lastAccuracyStatus = "safe";
 let currentPlayerId = "";
 let currentRoomCode = "202603";
+let currentTeacherCode = "";
+let teacherClientId = "";
 let remotePlayers = [];
 let teacherPollId = 0;
 let roomPollId = 0;
@@ -72,6 +75,10 @@ let lastPlayerSyncAt = 0;
 let audioContext;
 let musicTimer = 0;
 let masterGain;
+
+function getRoomStorageCode() {
+  return roomCode || (currentTeacherCode ? `teacher-${currentTeacherCode}` : "teacher-waiting");
+}
 
 const cheerArts = [
   "♥ ♥ ♥  산현 파이팅  ♥ ♥ ♥",
@@ -173,15 +180,28 @@ function showScreen(screen) {
 }
 
 function saveSession(role, data = {}) {
-  localStorage.setItem(SESSION_KEY, JSON.stringify({ role, ...data }));
+  sessionStorage.setItem(SESSION_KEY, JSON.stringify({ role, ...data }));
 }
 
 function getSession() {
   try {
-    return JSON.parse(localStorage.getItem(SESSION_KEY) || "{}");
+    return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "{}");
   } catch {
     return {};
   }
+}
+
+function clearLegacySession() {
+  localStorage.removeItem(SESSION_KEY);
+}
+
+function getTeacherClientId() {
+  let id = sessionStorage.getItem("type_io_teacher_client_id");
+  if (!id) {
+    id = crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    sessionStorage.setItem("type_io_teacher_client_id", id);
+  }
+  return id;
 }
 
 function showRulesIfNeeded() {
@@ -342,16 +362,17 @@ async function verifyRoomCode(inputCode) {
   if (!hasSupabaseConfig()) return inputCode === roomCode;
   try {
     const rows = await requestSupabase(`${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(inputCode)}&select=room_code,active_subject,active_title,active_passage,status&limit=1`);
-    return Array.isArray(rows) && rows.length > 0;
+    const room = Array.isArray(rows) ? rows[0] : null;
+    return !!(room && room.active_passage);
   } catch {
-    return inputCode === roomCode;
+    return false;
   }
 }
 
 async function loadActiveRoom(inputCode) {
   if (!hasSupabaseConfig()) return false;
   try {
-    const rows = await requestSupabase(`${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(inputCode)}&select=room_code,active_subject,active_title,active_passage,status&limit=1`);
+    const rows = await requestSupabase(`${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(inputCode)}&select=room_code,teacher_code,active_subject,active_title,active_passage,status&limit=1`);
     const room = Array.isArray(rows) ? rows[0] : null;
     if (!room || !room.active_passage) return false;
     currentPassage = {
@@ -362,34 +383,116 @@ async function loadActiveRoom(inputCode) {
     };
     roomCode = room.room_code || inputCode;
     currentRoomCode = roomCode;
+    currentTeacherCode = room.teacher_code || "";
     return true;
   } catch {
     return false;
   }
 }
 
+async function enterTeacherRoom(pin) {
+  currentTeacherCode = pin;
+  teacherClientId = getTeacherClientId();
+  if (!hasSupabaseConfig()) {
+    currentRoomCode = roomCode;
+    return true;
+  }
+  const rows = await requestSupabase(`${ROOMS_TABLE}?teacher_code=eq.${encodeURIComponent(pin)}&select=room_code,teacher_client_id,teacher_active_at,active_subject,active_title,active_passage,status&limit=1`);
+  const room = Array.isArray(rows) ? rows[0] : null;
+  const activeAt = Date.parse(room?.teacher_active_at || "") || 0;
+  const occupied = room?.teacher_client_id
+    && room.teacher_client_id !== teacherClientId
+    && Date.now() - activeAt < TEACHER_ACTIVE_MS;
+  if (occupied) return false;
+  if (room?.room_code) {
+    const savedStudentCode = /^\d{4,}$/.test(room.room_code) ? room.room_code : "";
+    roomCode = savedStudentCode;
+    currentRoomCode = room.room_code;
+    customRoomCodeInput.value = savedStudentCode;
+    if (room.active_passage) {
+      currentPassage = {
+        subject: room.active_subject || currentPassage.subject,
+        title: room.active_title || currentPassage.title,
+        source: `${room.active_subject || "교사"} / 교사 배포 지문`,
+        text: room.active_passage
+      };
+    }
+  } else {
+    roomCode = "";
+    currentRoomCode = getRoomStorageCode();
+    customRoomCodeInput.value = "";
+  }
+  await saveRoomCodeToSupabase();
+  return true;
+}
+
+async function releaseTeacherRoom() {
+  if (!hasSupabaseConfig() || !currentTeacherCode || !teacherClientId) return;
+  await requestSupabase(`${ROOMS_TABLE}?teacher_code=eq.${encodeURIComponent(currentTeacherCode)}&teacher_client_id=eq.${encodeURIComponent(teacherClientId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      teacher_client_id: null,
+      teacher_active_at: null,
+      updated_at: new Date().toISOString()
+    })
+  }).catch(() => {});
+}
+
 async function saveRoomCodeToSupabase() {
   if (!hasSupabaseConfig()) return false;
+  const storageCode = getRoomStorageCode();
+  if (/^\d{4,}$/.test(storageCode)) {
+    const conflictRows = await requestSupabase(`${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(storageCode)}&select=room_code,teacher_code&limit=1`);
+    const conflict = Array.isArray(conflictRows) ? conflictRows[0] : null;
+    if (conflict?.teacher_code && conflict.teacher_code !== currentTeacherCode) {
+      throw new Error("ROOM_CODE_IN_USE");
+    }
+    if (conflict && !conflict.teacher_code && currentTeacherCode) {
+      await requestSupabase(`${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(storageCode)}&teacher_code=is.null`, {
+        method: "DELETE"
+      }).catch(() => {});
+    }
+  }
+  const body = {
+    room_code: storageCode,
+    teacher_code: currentTeacherCode || null,
+    teacher_client_id: teacherClientId || null,
+    teacher_active_at: new Date().toISOString(),
+    active_subject: currentPassage.subject,
+    active_title: currentPassage.title,
+    active_passage: currentPassage.text,
+    status: "waiting",
+    updated_at: new Date().toISOString()
+  };
+  if (currentTeacherCode) {
+    const existing = await requestSupabase(`${ROOMS_TABLE}?teacher_code=eq.${encodeURIComponent(currentTeacherCode)}&select=room_code&limit=1`);
+    if (existing?.[0]) {
+      await requestSupabase(`${ROOMS_TABLE}?teacher_code=eq.${encodeURIComponent(currentTeacherCode)}`, {
+        method: "PATCH",
+        headers: {
+          Prefer: "return=representation"
+        },
+        body: JSON.stringify(body)
+      });
+      return true;
+    }
+  }
   await requestSupabase(`${ROOMS_TABLE}?on_conflict=room_code`, {
     method: "POST",
     headers: {
       Prefer: "resolution=merge-duplicates,return=representation"
     },
-    body: JSON.stringify({
-      room_code: roomCode,
-      active_subject: currentPassage.subject,
-      active_title: currentPassage.title,
-      active_passage: currentPassage.text,
-      status: "waiting",
-      updated_at: new Date().toISOString()
-    })
+    body: JSON.stringify(body)
   });
   return true;
 }
 
 async function setRoomStatus(status) {
   if (!hasSupabaseConfig()) return false;
-  await requestSupabase(`${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(roomCode)}`, {
+  const roomFilter = currentTeacherCode
+    ? `teacher_code=eq.${encodeURIComponent(currentTeacherCode)}`
+    : `room_code=eq.${encodeURIComponent(roomCode)}`;
+  await requestSupabase(`${ROOMS_TABLE}?${roomFilter}`, {
     method: "PATCH",
     headers: {
       Prefer: "return=representation"
@@ -397,6 +500,7 @@ async function setRoomStatus(status) {
     body: JSON.stringify({
       status,
       started_at: status === "countdown" || status === "playing" ? new Date().toISOString() : null,
+      teacher_active_at: currentTeacherCode ? new Date().toISOString() : undefined,
       updated_at: new Date().toISOString()
     })
   });
@@ -498,6 +602,15 @@ function renderTeacherRankings(players = remotePlayers) {
 
 async function refreshTeacherLive() {
   try {
+    if (currentTeacherCode && teacherClientId) {
+      requestSupabase(`${ROOMS_TABLE}?teacher_code=eq.${encodeURIComponent(currentTeacherCode)}&teacher_client_id=eq.${encodeURIComponent(teacherClientId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          teacher_active_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+      }).catch(() => {});
+    }
     const players = await fetchPlayers();
     renderTeacherStudents(players);
     renderTeacherRankings(players);
@@ -588,6 +701,27 @@ function deleteCurrentPlayerOnExit() {
     "Content-Type": "application/json"
   };
   fetch(url, { method: "DELETE", headers, keepalive: true }).catch(() => {});
+}
+
+function releaseTeacherOnExit() {
+  if (!hasSupabaseConfig() || !currentTeacherCode || !teacherClientId) return;
+  const config = getSupabaseConfig();
+  const url = `${config.url}/rest/v1/${ROOMS_TABLE}?teacher_code=eq.${encodeURIComponent(currentTeacherCode)}&teacher_client_id=eq.${encodeURIComponent(teacherClientId)}`;
+  const headers = {
+    apikey: config.key,
+    Authorization: `Bearer ${config.key}`,
+    "Content-Type": "application/json"
+  };
+  fetch(url, {
+    method: "PATCH",
+    headers,
+    keepalive: true,
+    body: JSON.stringify({
+      teacher_client_id: null,
+      teacher_active_at: null,
+      updated_at: new Date().toISOString()
+    })
+  }).catch(() => {});
 }
 
 async function pollRoomForStart() {
@@ -1185,6 +1319,15 @@ async function restoreSession() {
     studentCodeInput.value = session.roomCode;
     studentNameInput.value = session.name;
     await enterStudentBattle(session.roomCode, session.name, { silent: true });
+  } else if (session.role === "teacher" && session.teacherCode) {
+    currentTeacherCode = session.teacherCode;
+    teacherClientId = getTeacherClientId();
+    const restored = await enterTeacherRoom(session.teacherCode).catch(() => false);
+    if (!restored) return;
+    syncTeacherFields();
+    loadPassageTitlesForSubject();
+    startTeacherPolling();
+    showScreen(teacherScreen);
   }
 }
 
@@ -1231,15 +1374,28 @@ document.getElementById("studentEnterBtn").addEventListener("click", async () =>
   await enterStudentBattle(inputCode, name);
 });
 
-document.getElementById("teacherEnterBtn").addEventListener("click", () => {
-  if (teacherPinInput.value.trim() !== TEACHER_PIN) {
+document.getElementById("teacherEnterBtn").addEventListener("click", async () => {
+  const pin = teacherPinInput.value.trim();
+  if (!TEACHER_PINS.includes(pin)) {
     teacherAuthMessage.textContent = "관리자 인증번호가 맞지 않습니다.";
     teacherPinInput.focus();
     return;
   }
+  teacherAuthMessage.textContent = "교사 방을 확인하는 중입니다...";
+  try {
+    const entered = await enterTeacherRoom(pin);
+    if (!entered) {
+      teacherAuthMessage.textContent = "다른 교사가 사용중입니다.";
+      teacherPinInput.focus();
+      return;
+    }
+  } catch {
+    teacherAuthMessage.textContent = "교사 방 확인에 실패했습니다. Supabase 설정을 확인해주세요.";
+    teacherPinInput.focus();
+    return;
+  }
   teacherAuthMessage.textContent = "";
-  currentRoomCode = roomCode;
-  saveSession("teacher", { roomCode });
+  saveSession("teacher", { roomCode, teacherCode: currentTeacherCode });
   syncTeacherFields();
   loadPassageTitlesForSubject();
   startTeacherPolling();
@@ -1259,6 +1415,8 @@ document.getElementById("applyRoomCodeBtn").addEventListener("click", async () =
     customRoomCodeInput.focus();
     return;
   }
+  const previousRoomCode = roomCode;
+  const previousCurrentRoomCode = currentRoomCode;
   roomCode = nextCode;
   currentRoomCode = nextCode;
   if (roomCodeEl) roomCodeEl.textContent = roomCode;
@@ -1268,8 +1426,12 @@ document.getElementById("applyRoomCodeBtn").addEventListener("click", async () =
     roomCodeMessage.textContent = saved
       ? `학생 입장코드가 ${roomCode}(으)로 Supabase에 저장되었습니다.`
       : `학생 입장코드가 ${roomCode}(으)로 이 브라우저에만 설정되었습니다.`;
+    if (currentTeacherCode) saveSession("teacher", { roomCode, teacherCode: currentTeacherCode });
   } catch {
-    roomCodeMessage.textContent = `학생 입장코드가 ${roomCode}(으)로 이 브라우저에만 설정되었습니다. Supabase 저장은 실패했습니다.`;
+    roomCode = previousRoomCode;
+    currentRoomCode = previousCurrentRoomCode;
+    customRoomCodeInput.value = previousRoomCode;
+    roomCodeMessage.textContent = "이미 다른 교사가 사용 중인 학생 입장코드이거나 Supabase 저장에 실패했습니다.";
   }
 });
 
@@ -1457,11 +1619,13 @@ langToggleBtn.addEventListener("click", () => {
 
 window.addEventListener("resize", resizeCanvas);
 window.addEventListener("pagehide", deleteCurrentPlayerOnExit);
+window.addEventListener("pagehide", releaseTeacherOnExit);
 
 loadSupabaseConfig();
 syncTeacherFields();
 resizeCanvas();
 animateParticles();
+clearLegacySession();
 restoreSession();
 setInterval(() => {
   if (!tickerWindow) return;

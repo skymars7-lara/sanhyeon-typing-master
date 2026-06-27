@@ -1076,9 +1076,9 @@ p {
 }
 
 .space-char {
-  color: rgba(255, 209, 102, 0.95);
+  color: rgba(237, 246, 255, 0.66);
   font-weight: 900;
-  text-shadow: 0 0 10px rgba(255, 209, 102, 0.35);
+  text-shadow: none;
 }
 
 .enter-char {
