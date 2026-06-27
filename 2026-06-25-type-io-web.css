@@ -1104,8 +1104,17 @@ p {
 
 .space-char {
   color: rgba(237, 246, 255, 0.66);
+  background: transparent;
   font-weight: 900;
   text-shadow: none;
+}
+
+.done-char.space-char {
+  color: var(--green);
+}
+
+.bad-char.space-char {
+  color: var(--red);
 }
 
 .enter-char {

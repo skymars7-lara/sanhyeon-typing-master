@@ -363,9 +363,13 @@ async function requestSupabase(path, options = {}) {
 async function verifyRoomCode(inputCode) {
   if (!hasSupabaseConfig()) return inputCode === roomCode;
   try {
-    const rows = await requestSupabase(`${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(inputCode)}&select=room_code,active_subject,active_title,active_passage,status&limit=1`);
+    const rows = await requestSupabase(`${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(inputCode)}&select=room_code,teacher_code,active_subject,active_title,active_passage,status&limit=1`);
     const room = Array.isArray(rows) ? rows[0] : null;
-    return !!(room && room.active_passage);
+    return !!(
+      room
+      && TEACHER_PINS.includes(room.teacher_code)
+      && room.active_passage
+    );
   } catch {
     return false;
   }
@@ -514,6 +518,22 @@ async function resetRoomPlayers() {
   await requestSupabase(`${PLAYERS_TABLE}?room_code=eq.${encodeURIComponent(currentRoomCode)}`, {
     method: "DELETE"
   });
+}
+
+async function removePreviousRoom(previousCode, nextCode) {
+  if (
+    !hasSupabaseConfig()
+    || !previousCode
+    || previousCode === nextCode
+    || !currentTeacherCode
+  ) return;
+  await requestSupabase(`${PLAYERS_TABLE}?room_code=eq.${encodeURIComponent(previousCode)}`, {
+    method: "DELETE"
+  });
+  await requestSupabase(
+    `${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(previousCode)}&teacher_code=eq.${encodeURIComponent(currentTeacherCode)}`,
+    { method: "DELETE" }
+  );
 }
 
 async function pauseBattle() {
@@ -1000,7 +1020,7 @@ function escapeHtml(value) {
 }
 
 function visibleChar(char) {
-  if (char === " ") return "·";
+  if (char === " ") return "␣";
   if (char === "\n") return "↵";
   return char;
 }
@@ -1517,6 +1537,10 @@ document.getElementById("applyRoomCodeBtn").addEventListener("click", async () =
   roomCodeMessage.textContent = "입장코드를 저장하는 중입니다...";
   try {
     const saved = await saveRoomCodeToSupabase();
+    await removePreviousRoom(previousRoomCode, nextCode);
+    remotePlayers = [];
+    renderTeacherStudents([]);
+    renderTeacherRankings([]);
     roomCodeMessage.textContent = saved
       ? `학생 입장코드가 ${roomCode}(으)로 Supabase에 저장되었습니다.`
       : `학생 입장코드가 ${roomCode}(으)로 이 브라우저에만 설정되었습니다.`;
