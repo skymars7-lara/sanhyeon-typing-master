@@ -440,6 +440,33 @@ p {
   margin-bottom: 0;
 }
 
+.editor-title-field {
+  display: grid;
+  gap: 0.35rem;
+  min-width: min(26rem, 48vw);
+}
+
+.editor-title-field[hidden] {
+  display: none;
+}
+
+.editor-title-field span {
+  color: var(--cyan);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.editor-title-field input {
+  width: 100%;
+  border: 1px solid rgba(0, 232, 255, 0.5);
+  border-radius: 6px;
+  padding: 0.65rem 0.75rem;
+  color: var(--text);
+  background: rgba(3, 8, 20, 0.9);
+  font: inherit;
+  font-weight: 800;
+}
+
 .editor-actions {
   display: flex;
   align-items: center;
@@ -451,6 +478,12 @@ p {
 .publish-btn {
   background: var(--yellow);
   color: #121200;
+}
+
+.delete-btn {
+  border-color: rgba(255, 54, 92, 0.65);
+  color: #fff;
+  background: rgba(255, 54, 92, 0.2);
 }
 
 .status-pill {

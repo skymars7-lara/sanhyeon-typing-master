@@ -75,6 +75,7 @@ let lastPlayerSyncAt = 0;
 let audioContext;
 let musicTimer = 0;
 let masterGain;
+let editingOriginalTitle = "";
 
 function getRoomStorageCode() {
   return roomCode || (currentTeacherCode ? `teacher-${currentTeacherCode}` : "teacher-waiting");
@@ -116,8 +117,10 @@ const newPassageBtn = document.getElementById("newPassageBtn");
 const textFileInput = document.getElementById("textFileInput");
 const passageTextInput = document.getElementById("passageTextInput");
 const editPassageBtn = document.getElementById("editPassageBtn");
+const deletePassageBtn = document.getElementById("deletePassageBtn");
 const publishPassageBtn = document.getElementById("publishPassageBtn");
 const teacherPassageLabel = document.getElementById("teacherPassageLabel");
+const editorTitleField = document.getElementById("editorTitleField");
 const driveState = document.getElementById("driveState");
 const supabaseUrlInput = document.getElementById("supabaseUrlInput");
 const supabaseKeyInput = document.getElementById("supabaseKeyInput");
@@ -228,16 +231,23 @@ function splitPassage(text) {
 }
 
 function updateTeacherLabel() {
-  teacherPassageLabel.textContent = `${subjectSelect.value} / ${passageTitleInput.value || "제목 없음"}`;
+  teacherPassageLabel.textContent = passageTitleInput.value || "제목 없음";
+}
+
+function setPassageEditing(editing) {
+  passageTextInput.readOnly = !editing;
+  editorTitleField.hidden = !editing;
+  teacherPassageLabel.hidden = editing;
+  editPassageBtn.textContent = editing ? "수정 중" : "수정";
 }
 
 function syncTeacherFields() {
   subjectSelect.value = currentPassage.subject;
   passageTitleInput.value = currentPassage.title;
+  editingOriginalTitle = currentPassage.title;
   if (passageTitleSelect) passageTitleSelect.value = currentPassage.title;
   passageTextInput.value = currentPassage.text;
-  passageTextInput.readOnly = true;
-  editPassageBtn.textContent = "수정";
+  setPassageEditing(false);
   updateTeacherLabel();
 }
 
@@ -251,12 +261,12 @@ function startNewPassage() {
     text: ""
   };
   passageTitleInput.value = currentPassage.title;
+  editingOriginalTitle = "";
   passageTitleSelect.value = "";
   passageTextInput.value = "";
-  passageTextInput.readOnly = false;
-  editPassageBtn.textContent = "수정 중";
+  setPassageEditing(true);
   updateTeacherLabel();
-  passageTextInput.focus();
+  passageTitleInput.focus();
 }
 
 function savePassages(passages) {
@@ -269,6 +279,19 @@ function getPassages() {
   } catch {
     return {};
   }
+}
+
+function removeCachedPassage(subject, title) {
+  const passages = getPassages();
+  const list = Array.isArray(passages[subject])
+    ? passages[subject]
+    : passages[subject]
+      ? [passages[subject]]
+      : [];
+  const remaining = list.filter((passage) => passage.title !== title);
+  if (remaining.length) passages[subject] = remaining;
+  else delete passages[subject];
+  savePassages(passages);
 }
 
 function getSupabaseConfig() {
@@ -869,6 +892,7 @@ async function loadPassageTitlesForSubject() {
 }
 
 async function saveCurrentPassage() {
+  const originalTitle = editingOriginalTitle;
   const passageToSave = {
     subject: subjectSelect.value,
     title: passageTitleInput.value.trim() || "제목 없음",
@@ -899,6 +923,13 @@ async function saveCurrentPassage() {
       if (!verified || verified.body !== passageToSave.text) {
         throw new Error("SAVED_PASSAGE_MISMATCH");
       }
+      if (originalTitle && originalTitle !== passageToSave.title) {
+        await requestSupabase(
+          `${config.table}?subject=eq.${encodeURIComponent(passageToSave.subject)}&title=eq.${encodeURIComponent(originalTitle)}`,
+          { method: "DELETE" }
+        );
+        removeCachedPassage(passageToSave.subject, originalTitle);
+      }
       currentPassage = {
         subject: verified.subject,
         title: verified.title,
@@ -912,18 +943,77 @@ async function saveCurrentPassage() {
       passageTitleSelect.value = currentPassage.title;
     } catch (error) {
       driveState.textContent = "Supabase 저장 실패 - 수정 내용이 배포되지 않았습니다";
-      passageTextInput.readOnly = false;
-      editPassageBtn.textContent = "수정 중";
+      setPassageEditing(true);
       throw error;
     }
   } else {
+    if (originalTitle && originalTitle !== passageToSave.title) {
+      removeCachedPassage(passageToSave.subject, originalTitle);
+    }
     currentPassage = passageToSave;
     cacheCurrentPassage(currentPassage);
     driveState.textContent = "브라우저 임시 저장 완료";
   }
-  passageTextInput.readOnly = true;
-  editPassageBtn.textContent = "수정";
+  editingOriginalTitle = currentPassage.title;
+  setPassageEditing(false);
   updateTeacherLabel();
+}
+
+async function deleteCurrentPassage() {
+  const subject = currentPassage.subject || subjectSelect.value;
+  const title = currentPassage.title || passageTitleInput.value.trim();
+  if (!title || !window.confirm(`'${title}' 지문을 삭제하시겠습니까?`)) return;
+  deletePassageBtn.disabled = true;
+  driveState.textContent = "지문 삭제 중...";
+  try {
+    if (hasSupabaseConfig()) {
+      const config = getSupabaseConfig();
+      await requestSupabase(
+        `${config.table}?subject=eq.${encodeURIComponent(subject)}&title=eq.${encodeURIComponent(title)}`,
+        { method: "DELETE" }
+      );
+      if (currentTeacherCode) {
+        await requestSupabase(
+          `${ROOMS_TABLE}?teacher_code=eq.${encodeURIComponent(currentTeacherCode)}&active_subject=eq.${encodeURIComponent(subject)}&active_title=eq.${encodeURIComponent(title)}`,
+          {
+            method: "PATCH",
+            body: JSON.stringify({
+              active_subject: null,
+              active_title: null,
+              active_passage: null,
+              status: "waiting",
+              updated_at: new Date().toISOString()
+            })
+          }
+        );
+      }
+    }
+    removeCachedPassage(subject, title);
+    const passages = await loadPassageTitlesForSubject();
+    if (passages[0]) {
+      currentPassage = passages[0];
+      syncTeacherFields();
+      passageTitleSelect.value = currentPassage.title;
+    } else {
+      currentPassage = {
+        subject: subjectSelect.value,
+        title: "새 지문",
+        source: `${subjectSelect.value} / 교사 작성 지문`,
+        text: ""
+      };
+      passageTitleInput.value = currentPassage.title;
+      passageTitleSelect.value = "";
+      passageTextInput.value = "";
+      editingOriginalTitle = "";
+      setPassageEditing(true);
+      updateTeacherLabel();
+    }
+    driveState.textContent = "지문 삭제 완료";
+  } catch {
+    driveState.textContent = "지문 삭제 실패 - Supabase SQL을 다시 적용해주세요";
+  } finally {
+    deletePassageBtn.disabled = false;
+  }
 }
 
 async function loadSavedPassage() {
@@ -1562,10 +1652,12 @@ document.getElementById("saveSupabaseConfigBtn").addEventListener("click", saveS
 document.getElementById("saveSupabaseConfigInlineBtn").addEventListener("click", saveSupabaseConfig);
 document.getElementById("testSupabaseBtn").addEventListener("click", testSupabaseConnection);
 editPassageBtn.addEventListener("click", () => {
-  passageTextInput.readOnly = !passageTextInput.readOnly;
-  editPassageBtn.textContent = passageTextInput.readOnly ? "수정" : "수정 중";
-  if (!passageTextInput.readOnly) passageTextInput.focus();
+  const editing = passageTextInput.readOnly;
+  if (editing) editingOriginalTitle = currentPassage.title;
+  setPassageEditing(editing);
+  if (editing) passageTitleInput.focus();
 });
+deletePassageBtn.addEventListener("click", deleteCurrentPassage);
 publishPassageBtn.addEventListener("click", publishPassage);
 teacherBattleBtn.addEventListener("click", () => {
   publishPassage().then((published) => {
@@ -1669,6 +1761,7 @@ textFileInput.addEventListener("change", async () => {
   const file = textFileInput.files[0];
   if (!file) return;
   passageTitleInput.value = file.name.replace(/\.(txt|pdf)$/i, "");
+  editingOriginalTitle = "";
   if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
     const extracted = await extractPdfText(file);
     passageTextInput.value = extracted || "PDF에서 텍스트를 자동 추출하지 못했습니다. 복사 가능한 PDF인지 확인한 뒤 지문을 직접 붙여넣어 주세요.";
@@ -1677,8 +1770,7 @@ textFileInput.addEventListener("change", async () => {
     passageTextInput.value = await file.text();
     driveState.textContent = "텍스트 파일 업로드 완료";
   }
-  passageTextInput.readOnly = false;
-  editPassageBtn.textContent = "수정 중";
+  setPassageEditing(true);
   updateTeacherLabel();
 });
 

@@ -77,6 +77,7 @@ alter table public.type_io_players enable row level security;
 drop policy if exists "type_io_passages_select" on public.type_io_passages;
 drop policy if exists "type_io_passages_insert" on public.type_io_passages;
 drop policy if exists "type_io_passages_update" on public.type_io_passages;
+drop policy if exists "type_io_passages_delete" on public.type_io_passages;
 drop policy if exists "rooms_select" on public.type_io_rooms;
 drop policy if exists "rooms_insert" on public.type_io_rooms;
 drop policy if exists "rooms_update" on public.type_io_rooms;
@@ -97,6 +98,9 @@ on public.type_io_passages for insert to anon with check (true);
 
 create policy "type_io_passages_update"
 on public.type_io_passages for update to anon using (true) with check (true);
+
+create policy "type_io_passages_delete"
+on public.type_io_passages for delete to anon using (true);
 
 create policy "rooms_select"
 on public.type_io_rooms for select to anon using (true);
