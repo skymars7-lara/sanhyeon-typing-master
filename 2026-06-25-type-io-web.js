@@ -760,7 +760,11 @@ async function pollRoomForStart() {
     const rows = await requestSupabase(`${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(currentRoomCode)}&select=status,active_subject,active_title,active_passage&limit=1`);
     const room = rows?.[0];
     if (!room) return;
-    if (room.active_passage && (room.active_subject !== currentPassage.subject || room.active_title !== currentPassage.title)) {
+    if (room.active_passage && (
+      room.active_subject !== currentPassage.subject
+      || room.active_title !== currentPassage.title
+      || room.active_passage !== currentPassage.text
+    )) {
       currentPassage = {
         subject: room.active_subject || "국어",
         title: room.active_title || "배포 지문",
@@ -845,13 +849,13 @@ async function loadPassageTitlesForSubject() {
 }
 
 async function saveCurrentPassage() {
-  currentPassage = {
+  const passageToSave = {
     subject: subjectSelect.value,
     title: passageTitleInput.value.trim() || "제목 없음",
     source: `${subjectSelect.value} / 교사 업로드 지문`,
     text: passageTextInput.value.trim() || samples.ko.text
   };
-  cacheCurrentPassage(currentPassage);
+  driveState.textContent = "지문 저장 중...";
   if (hasSupabaseConfig()) {
     const config = getSupabaseConfig();
     try {
@@ -861,20 +865,40 @@ async function saveCurrentPassage() {
           Prefer: "resolution=merge-duplicates,return=representation"
         },
         body: JSON.stringify({
-          subject: currentPassage.subject,
-          title: currentPassage.title,
-          source: currentPassage.source,
-          body: currentPassage.text,
+          subject: passageToSave.subject,
+          title: passageToSave.title,
+          source: passageToSave.source,
+          body: passageToSave.text,
           updated_at: new Date().toISOString()
         })
       });
-      driveState.textContent = "Supabase 저장 완료";
+      const verifiedRows = await requestSupabase(
+        `${config.table}?subject=eq.${encodeURIComponent(passageToSave.subject)}&title=eq.${encodeURIComponent(passageToSave.title)}&select=subject,title,source,body,updated_at&limit=1`
+      );
+      const verified = verifiedRows?.[0];
+      if (!verified || verified.body !== passageToSave.text) {
+        throw new Error("SAVED_PASSAGE_MISMATCH");
+      }
+      currentPassage = {
+        subject: verified.subject,
+        title: verified.title,
+        source: verified.source || passageToSave.source,
+        text: verified.body
+      };
+      cacheCurrentPassage(currentPassage);
+      passageTextInput.value = currentPassage.text;
+      driveState.textContent = "Supabase 저장 및 확인 완료";
       await loadPassageTitlesForSubject();
       passageTitleSelect.value = currentPassage.title;
     } catch (error) {
-      driveState.textContent = "Supabase 실패 - 브라우저 저장";
+      driveState.textContent = "Supabase 저장 실패 - 수정 내용이 배포되지 않았습니다";
+      passageTextInput.readOnly = false;
+      editPassageBtn.textContent = "수정 중";
+      throw error;
     }
   } else {
+    currentPassage = passageToSave;
+    cacheCurrentPassage(currentPassage);
     driveState.textContent = "브라우저 임시 저장 완료";
   }
   passageTextInput.readOnly = true;
@@ -941,18 +965,27 @@ function prepareBattle() {
 }
 
 async function publishPassage() {
-  await saveCurrentPassage();
-  currentPassage = {
-    subject: subjectSelect.value,
-    title: passageTitleInput.value.trim() || "제목 없음",
-    source: `${subjectSelect.value} / 교사 배포 지문`,
-    text: passageTextInput.value.trim() || samples.ko.text
-  };
+  publishPassageBtn.disabled = true;
+  driveState.textContent = "수정 지문 저장 후 배포 중...";
   try {
+    await saveCurrentPassage();
+    currentPassage.source = `${currentPassage.subject} / 교사 배포 지문`;
     const saved = await saveRoomCodeToSupabase();
-    driveState.textContent = saved ? "학생 배틀 지문으로 Supabase 배포됨" : "학생 배틀 지문으로 배포됨";
-  } catch {
-    driveState.textContent = "학생 배틀 지문으로 배포됨 - Supabase 방 갱신 실패";
+    if (!saved) throw new Error("ROOM_PUBLISH_FAILED");
+    const roomRows = await requestSupabase(
+      `${ROOMS_TABLE}?room_code=eq.${encodeURIComponent(getRoomStorageCode())}&select=active_subject,active_title,active_passage&limit=1`
+    );
+    const published = roomRows?.[0];
+    if (!published || published.active_passage !== currentPassage.text) {
+      throw new Error("PUBLISHED_PASSAGE_MISMATCH");
+    }
+    driveState.textContent = "수정한 지문이 학생 화면에 배포되었습니다";
+    return true;
+  } catch (error) {
+    driveState.textContent = "배포 실패 - 저장 상태와 Supabase 연결을 확인하세요";
+    return false;
+  } finally {
+    publishPassageBtn.disabled = false;
   }
 }
 
@@ -1497,7 +1530,7 @@ document.getElementById("applyRoomCodeBtn").addEventListener("click", async () =
 });
 
 document.getElementById("savePassageBtn").addEventListener("click", () => {
-  saveCurrentPassage();
+  saveCurrentPassage().catch(() => {});
 });
 const loadPassageBtn = document.getElementById("loadPassageBtn");
 if (loadPassageBtn) loadPassageBtn.addEventListener("click", loadSavedPassage);
@@ -1511,7 +1544,8 @@ editPassageBtn.addEventListener("click", () => {
 });
 publishPassageBtn.addEventListener("click", publishPassage);
 teacherBattleBtn.addEventListener("click", () => {
-  publishPassage().then(() => {
+  publishPassage().then((published) => {
+    if (!published) return;
     isTeacherBattle = true;
     currentRoomCode = roomCode;
     playerName.textContent = studentNameInput.value.trim() || "교사";
@@ -1528,7 +1562,7 @@ document.getElementById("goBattleBtn").addEventListener("click", () => {
     prepareBattle();
     startTeacherPolling();
     showScreen(battleScreen);
-  });
+  }).catch(() => {});
 });
 
 battleStartBtn.addEventListener("click", () => {
